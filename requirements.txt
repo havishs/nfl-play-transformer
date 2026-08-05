@@ -3,3 +3,10 @@ pandas==3.0.5
 pyarrow==25.0.0
 pytest==9.1.1
 torch==2.13.0
+# nfl_data_py pins pandas<2.0,numpy<1.0 but runs fine against the modern
+# versions above -- install with `pip install nfl_data_py==0.3.3 --no-deps`,
+# not a plain `pip install -r requirements.txt`, or pip will try to enforce
+# that stale pin. See PROJECT_BRIEF.md's "Install gotcha" section.
+nfl_data_py==0.3.3
+requests==2.34.2
+appdirs==1.4.4

@@ -21,8 +21,15 @@ from get_batch import GameBatcher, build_game_index
 from model import OUTPUT_HEADS, GameTransformer
 
 # ---- hyperparameters ----
-HISTORY_SEASONS = [2022]
-TRAINING_SEASONS = [2023]
+# 2016-2017 excluded: nfl_data_py's weekly PFR defensive stats (weekly_def)
+# aren't available before 2018 ("Data not available before 2018."), so
+# 2018-2023 is the actual full range achievable, not 2016-2023 as originally
+# scoped -- a real data-availability constraint discovered while fetching,
+# not a design choice. No separate history-only seasons exist before that,
+# so HISTORY_SEASONS is empty; PlayerFeatureLookup's causal cumulative
+# stats naturally handle intra-range chronological ordering on their own.
+HISTORY_SEASONS = []
+TRAINING_SEASONS = [2018, 2019, 2020, 2021, 2022, 2023]
 DATA_DIR = "../data"
 VAL_FRACTION = 0.1
 BLOCK_SIZE = 32
