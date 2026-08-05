@@ -4,3 +4,4 @@ __pycache__/
 data/*.parquet
 .pytest_cache/
 *.pt
+*.pkl

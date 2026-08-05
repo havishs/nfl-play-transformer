@@ -10,6 +10,9 @@ Scope: this is step 1 of the plan only -- indices + masks. No DataLoader /
 get_batch, no model code yet.
 """
 
+import os
+import pickle
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -59,11 +62,31 @@ def _personnel_slot_to_vectors(player, position_vocab):
 
 
 class PlayDataset(Dataset):
-    def __init__(self, history_seasons, training_seasons, data_dir="../data", max_examples=None):
+    def __init__(self, history_seasons, training_seasons, data_dir="../data", max_examples=None, cache_path=None):
+        """
+        cache_path: if given and the file exists, load (examples, vocabs)
+        from there instead of rebuilding -- build_examples()'s per-row
+        iterrows() loop dominates wall time on multi-season data (minutes,
+        not seconds), so repeated experiments on the same season config
+        benefit from paying that cost once. Caller is responsible for using
+        a path that reflects the season config (e.g. encoding the seasons
+        in the filename) -- this class does not validate that a cached file
+        actually matches the requested seasons.
+        """
+        if cache_path and os.path.exists(cache_path):
+            with open(cache_path, "rb") as f:
+                self.examples, self.vocabs = pickle.load(f)
+            self._log_personnel_count_anomalies()
+            return
+
         self.examples = build_examples(history_seasons, training_seasons, data_dir, max_examples)
         vocab_seasons = sorted(set(history_seasons) | set(training_seasons))
         self.vocabs = V.build_vocabs(vocab_seasons, data_dir)
         self._log_personnel_count_anomalies()
+
+        if cache_path:
+            with open(cache_path, "wb") as f:
+                pickle.dump((self.examples, self.vocabs), f)
 
     def _log_personnel_count_anomalies(self):
         off_bad = sum(1 for ex in self.examples if len(ex["offense"]) != N_PERSONNEL)

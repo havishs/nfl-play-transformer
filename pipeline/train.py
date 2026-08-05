@@ -34,7 +34,14 @@ DATA_DIR = "../data"
 VAL_FRACTION = 0.1
 BLOCK_SIZE = 32
 BATCH_SIZE = 16
-MAX_ITERS = 2000
+# 2000 wasn't enough exposure once the training pool grew ~6x (257->1491
+# games): touchdown/turnover stayed exactly pinned to baseline while
+# yards_gained/return_yards improved. Each game now gets proportionally
+# less gradient exposure per step than before, so more steps -- not more
+# data alone -- may be what those two heads need. Best-checkpoint saving
+# below means a too-high value here costs wasted compute, not a worse
+# model, so this is safe to raise.
+MAX_ITERS = 8000
 EVAL_INTERVAL = 200
 EVAL_ITERS = 20
 LEARNING_RATE = 3e-4
@@ -45,6 +52,7 @@ DROPOUT = 0.1
 DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 SEED = 1337
 CHECKPOINT_PATH = "checkpoint.pt"
+CACHE_PATH = f"dataset_cache_{'-'.join(map(str, TRAINING_SEASONS))}.pkl"
 # --------------------------
 
 
@@ -126,8 +134,8 @@ def main():
     generator = torch.Generator().manual_seed(SEED)
 
     print(f"device: {DEVICE}")
-    print("building dataset (full season, ~3 min)...")
-    dataset = PlayDataset(HISTORY_SEASONS, TRAINING_SEASONS, DATA_DIR)
+    print(f"building dataset (cache: {CACHE_PATH})...")
+    dataset = PlayDataset(HISTORY_SEASONS, TRAINING_SEASONS, DATA_DIR, cache_path=CACHE_PATH)
 
     game_ids = sorted(build_game_index(dataset.examples).keys())
     n_val = max(1, round(len(game_ids) * VAL_FRACTION))
