@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 data/*.parquet
 .pytest_cache/
+*.pt
