@@ -14,6 +14,7 @@ model hasn't seen yet in time, not a random shuffle.
 import torch
 
 from dataset import PlayDataset
+from generate import GameSimulator, GameState
 from get_batch import GameBatcher, build_game_index
 from model import GameTransformer
 
@@ -89,6 +90,19 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
+
+    print("\n--- sample rollout from the trained model (step 4: does generate() look plausible?) ---")
+    model.eval()
+    sim = GameSimulator(model, dataset, seed_game_id=val_game_ids[0], device=DEVICE)
+    initial = GameState(
+        quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
+        posteam=sim.team_a, defteam=sim.team_b, posteam_score=0, defteam_score=0,
+    )
+    log = sim.generate(30, initial, generator=generator)
+    for entry in log:
+        s = entry["state"]
+        print(f"{entry['event']:10s} q{s.quarter} down{s.down} ydstogo{s.ydstogo:3d} "
+              f"yl100{s.yardline_100:3d}  {s.posteam} {s.posteam_score}-{s.defteam_score} {s.defteam}")
 
 
 if __name__ == "__main__":
