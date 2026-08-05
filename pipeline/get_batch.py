@@ -52,13 +52,13 @@ def collate_windows(windows):
 class GameBatcher:
     """Samples fixed-length, single-game windows from a PlayDataset for training."""
 
-    def __init__(self, dataset, block_size):
+    def __init__(self, dataset, block_size, game_ids=None):
         self.dataset = dataset
         self.block_size = block_size
         self.game_index = build_game_index(dataset.examples)
-        self.game_ids = list(self.game_index.keys())
+        candidate_ids = game_ids if game_ids is not None else list(self.game_index.keys())
         self.playable_game_ids = [
-            gid for gid, (start, end) in self.game_index.items() if end - start >= block_size
+            gid for gid in candidate_ids if self.game_index[gid][1] - self.game_index[gid][0] >= block_size
         ]
         if not self.playable_game_ids:
             raise ValueError(f"no game has >= block_size={block_size} plays; lower block_size")
