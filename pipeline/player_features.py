@@ -62,6 +62,12 @@ class PlayerFeatureLookup:
         self.bio = self.crosswalk.set_index("player_id")[["position", "years_exp", "draft_number"]]
         self._off_cache = self._build_cumulative(self.weekly_off, OFF_FEATS)
         self._def_cache = self._build_cumulative(self.weekly_def, DEF_FEATS)
+        # raw (non-aggregated) per-week rows, for the learned history encoder --
+        # _build_cumulative collapses a player's history to a single running
+        # mean; this keeps the actual per-week sequence so a model can learn
+        # its own aggregation instead of a hand-computed one.
+        self._off_raw = self._build_raw(self.weekly_off, OFF_FEATS)
+        self._def_raw = self._build_raw(self.weekly_def, DEF_FEATS)
 
     @staticmethod
     def _build_cumulative(table, feats):
@@ -77,6 +83,14 @@ class PlayerFeatureLookup:
             cum = g[feats].expanding().mean().shift(1)
             cum["n_prior_games"] = np.arange(len(g))  # count of prior games at each row
             out[pid] = cum
+        return out
+
+    @staticmethod
+    def _build_raw(table, feats):
+        """Per-player DataFrame of each week's own (feats), indexed by order_key -- no aggregation."""
+        out = {}
+        for pid, g in table.sort_values("order_key").groupby("player_id"):
+            out[pid] = g.set_index("order_key")[feats]
         return out
 
     def lookup(self, player_id, season, week):
@@ -110,6 +124,7 @@ class PlayerFeatureLookup:
         def_feats = {f: (float(def_row[f]) if has_def and not np.isnan(def_row[f]) else 0.0) for f in DEF_FEATS}
 
         return {
+            "player_id": player_id,
             "position": pos,
             "bio": bio,
             "off_feats": off_feats,
@@ -117,3 +132,46 @@ class PlayerFeatureLookup:
             "has_off_stats": bool(has_off),
             "has_def_stats": bool(has_def),
         }
+
+    def lookup_history_sequence(self, player_id, season, week, max_history):
+        """
+        Raw per-week [off_feats(4) | def_feats(5)] rows (zero-filled for
+        whichever side doesn't apply, same convention as lookup()) for up to
+        the `max_history` most recent STRICTLY EARLIER weeks -- for a real
+        learned encoder to aggregate itself, instead of the pre-collapsed
+        running mean lookup() returns. A player only ever has raw rows in
+        one of _off_raw/_def_raw in practice (see lookup()'s has_off/has_def
+        split), so at most one side is ever populated per row.
+
+        Returns (sequence, mask): sequence is float32 (max_history, 9),
+        mask is bool (max_history,) -- True where that row is real, False
+        where it's padding. Real rows are placed first (chronological,
+        oldest of the included window first), padding after -- mirrors
+        dataset.py's _pad_personnel convention.
+        """
+        key = _order_key(season, week)
+        n_feats = len(OFF_FEATS) + len(DEF_FEATS)
+
+        rows = []
+        if player_id in self._off_raw:
+            prior = self._off_raw[player_id]
+            prior = prior[prior.index < key].tail(max_history)
+            for _, r in prior.iterrows():
+                off = np.nan_to_num(r[OFF_FEATS].to_numpy(dtype=np.float32), nan=0.0)
+                rows.append((r.name, np.concatenate([off, np.zeros(len(DEF_FEATS), dtype=np.float32)])))
+        if player_id in self._def_raw:
+            prior = self._def_raw[player_id]
+            prior = prior[prior.index < key].tail(max_history)
+            for _, r in prior.iterrows():
+                defn = np.nan_to_num(r[DEF_FEATS].to_numpy(dtype=np.float32), nan=0.0)
+                rows.append((r.name, np.concatenate([np.zeros(len(OFF_FEATS), dtype=np.float32), defn])))
+
+        rows.sort(key=lambda x: x[0])  # chronological, in case a player somehow has both
+        rows = rows[-max_history:]
+
+        sequence = np.zeros((max_history, n_feats), dtype=np.float32)
+        mask = np.zeros(max_history, dtype=bool)
+        for i, (_, feats) in enumerate(rows):
+            sequence[i] = feats
+            mask[i] = True
+        return sequence, mask

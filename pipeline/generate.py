@@ -170,24 +170,39 @@ class GameSimulator:
 
         start = next(i for i, ex in enumerate(dataset.examples) if ex["game_id"] == seed_game_id)
         seed = dataset.examples[start]
+        self.season = int(seed_game_id.split("_")[0])
+        self.week = seed["week"]
         self.team_a = seed["situational"]["posteam"]
         self.team_a_personnel = (seed["offense"], seed["defense"])
         self.team_b = seed["situational"]["defteam"]
         self.team_b_personnel = (seed["defense"], seed["offense"])
 
     def _personnel_for(self, posteam):
+        # Personnel is a fixed snapshot (no substitution/in-game-form modeling, per
+        # the design doc) -- history is looked up once, at the seed game's cutoff,
+        # and held constant for the whole rollout, consistent with that.
         offense, defense = self.team_a_personnel if posteam == self.team_a else self.team_b_personnel
-        return self.dataset._personnel_tensors(offense), self.dataset._personnel_tensors(defense)
+        return (
+            self.dataset._personnel_tensors(offense),
+            self.dataset._personnel_tensors(defense),
+            self.dataset._history_tensors(offense, self.season, self.week),
+            self.dataset._history_tensors(defense, self.season, self.week),
+        )
 
     def _tensorize_step(self, state, play_type):
         situational = _situational_dict(state, play_type)
-        (off_pos, off_feat), (def_pos, def_feat) = self._personnel_for(state.posteam)
+        (off_pos, off_feat), (def_pos, def_feat), (off_hist, off_hist_mask), (def_hist, def_hist_mask) = \
+            self._personnel_for(state.posteam)
         return {
             "situational": self.dataset._situational_tensor(situational),
             "offense_position": off_pos,
             "offense_features": off_feat,
+            "offense_history": off_hist,
+            "offense_history_mask": off_hist_mask,
             "defense_position": def_pos,
             "defense_features": def_feat,
+            "defense_history": def_hist,
+            "defense_history_mask": def_hist_mask,
         }
 
     def generate(self, n_plays, initial_state, generator=None):
@@ -215,8 +230,7 @@ class GameSimulator:
 
             batch = {
                 k: torch.stack([w[k] for w in window]).unsqueeze(0).to(self.device)
-                for k in ("situational", "offense_position", "offense_features",
-                          "defense_position", "defense_features")
+                for k in window[0].keys()
             }
             with torch.no_grad():
                 logits, _ = self.model(batch)

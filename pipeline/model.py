@@ -5,10 +5,13 @@ decoder (adapted from the Karpathy "Let's build GPT" backbone, originally
 ~/Downloads/gpt.py) over play-summary tokens, with masked-loss output heads
 for yards_gained/touchdown/turnover/return_yards.
 
-Per PROJECT_BRIEF.md's staging: player history (design point 1) and
-in-game running form (point 2) are STUBBED -- personnel are represented by
-the hand-computed causal features from PlayerFeatureLookup (already baked
-into dataset.py's *_features tensors), no learned encoder or EMA state yet.
+Per PROJECT_BRIEF.md's staging: player history (design point 1) now has a
+real learned encoder (PlayerHistoryEncoder, below) -- see the design doc's
+addendum for why it's wired in ADDITIVELY (summed into PlayerEncoder's
+per-player embedding) rather than as true encoder-decoder cross-attention
+as the brief literally describes: same functional goal, much less risk
+right after getting the base architecture to finally train reliably.
+In-game running form (design point 2) is still STUBBED -- not built yet.
 
 play_type is intentionally NOT an output head: it's currently only a
 situational *input* field in build_dataset.py's build_targets() (never a
@@ -27,7 +30,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from dataset import PERSONNEL_FEATURE_DIM, SITUATIONAL_FIELDS, TEAM_FIELDS
+from dataset import HISTORY_FEATURE_DIM, MAX_HISTORY, PERSONNEL_FEATURE_DIM, SITUATIONAL_FIELDS, TEAM_FIELDS
 
 OUTPUT_HEADS = ["yards_gained", "touchdown", "turnover", "return_yards"]
 
@@ -134,6 +137,82 @@ class MultiHeadCrossAttention(nn.Module):
         return self.dropout(self.proj(out))
 
 
+class MaskedSelfHead(nn.Module):
+    """ One head of non-causal self-attention with a key-padding mask (for the history encoder). """
+
+    def __init__(self, n_embd, head_size, dropout):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, key_padding_mask):
+        # x: (..., T, C); key_padding_mask: (..., T) bool, True = real/attendable key.
+        k = self.key(x)
+        q = self.query(x)
+        wei = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5  # (..., T, T)
+        wei = wei.masked_fill(~key_padding_mask.unsqueeze(-2), float("-inf"))
+        wei = F.softmax(wei, dim=-1)
+        # a query position with NO real keys (a player with zero history) softmaxes
+        # an all -inf row to NaN -- zero it instead of letting NaN propagate. Harmless:
+        # that query's output is excluded from the encoder's final masked mean-pool anyway.
+        wei = torch.nan_to_num(wei, nan=0.0)
+        wei = self.dropout(wei)
+        v = self.value(x)
+        return wei @ v
+
+
+class MaskedMultiHeadSelfAttention(nn.Module):
+    def __init__(self, n_embd, num_heads, dropout):
+        super().__init__()
+        head_size = n_embd // num_heads
+        self.heads = nn.ModuleList([MaskedSelfHead(n_embd, head_size, dropout) for _ in range(num_heads)])
+        self.proj = nn.Linear(head_size * num_heads, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, key_padding_mask):
+        out = torch.cat([h(x, key_padding_mask) for h in self.heads], dim=-1)
+        return self.dropout(self.proj(out))
+
+
+class PlayerHistoryEncoder(nn.Module):
+    """
+    Bidirectional (non-causal) self-attention over a player's raw per-week
+    history -- a real learned encoder replacing PlayerFeatureLookup.lookup()'s
+    hand-computed causal mean, per PROJECT_BRIEF.md's design point 1.
+    Non-causal is correct here even though the outer decoder is causal: a
+    player's PAST history is already fully "finished" by the time it's being
+    summarized for the current play, unlike the play sequence itself.
+
+    Shared (same weights) across offense and defense calls -- the underlying
+    9-dim [off_feats | def_feats] vector is already side-agnostic (whichever
+    half doesn't apply is zero-filled), matching PlayerEncoder's own reuse.
+    """
+
+    def __init__(self, feature_dim, max_history, n_embd, n_head, dropout):
+        super().__init__()
+        self.week_proj = nn.Linear(feature_dim, n_embd)
+        self.position_embedding = nn.Embedding(max_history, n_embd)
+        self.attn = MaskedMultiHeadSelfAttention(n_embd, n_head, dropout)
+        self.ffwd = FeedFoward(n_embd, dropout)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.out_proj = nn.Linear(n_embd, n_embd)
+
+    def forward(self, history, mask):
+        # history: (..., T, feature_dim), mask: (..., T) bool -> (..., n_embd)
+        T = history.shape[-2]
+        pos = self.position_embedding(torch.arange(T, device=history.device))
+        x = self.week_proj(history) + pos
+        x = x + self.attn(self.ln1(x), mask)
+        x = x + self.ffwd(self.ln2(x))
+
+        mask_f = mask.unsqueeze(-1).float()
+        pooled = (x * mask_f).sum(dim=-2) / mask_f.sum(dim=-2).clamp(min=1)
+        return self.out_proj(pooled)
+
+
 class PlayerEncoder(nn.Module):
     """ Position embedding + linear projection of hand-computed causal features, additively combined. """
 
@@ -196,6 +275,7 @@ class GameTransformer(nn.Module):
         super().__init__()
         self.block_size = block_size
         self.player_encoder = PlayerEncoder(len(vocabs["position"]), PERSONNEL_FEATURE_DIM, n_embd)
+        self.history_encoder = PlayerHistoryEncoder(HISTORY_FEATURE_DIM, MAX_HISTORY, n_embd, n_head, dropout)
         self.nested_attention = NestedPlayAttention(n_embd, n_head, dropout)
         self.situational_encoder = SituationalEncoder(vocabs, n_embd)
         self.position_embedding = nn.Embedding(block_size, n_embd)
@@ -221,8 +301,10 @@ class GameTransformer(nn.Module):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, batch, targets=None):
-        offense = self.player_encoder(batch["offense_position"], batch["offense_features"])
-        defense = self.player_encoder(batch["defense_position"], batch["defense_features"])
+        offense = self.player_encoder(batch["offense_position"], batch["offense_features"]) \
+            + self.history_encoder(batch["offense_history"], batch["offense_history_mask"])
+        defense = self.player_encoder(batch["defense_position"], batch["defense_features"]) \
+            + self.history_encoder(batch["defense_history"], batch["defense_history_mask"])
         play_summary = self.nested_attention(offense, defense)  # (B, T, n_embd)
 
         situational = self.situational_encoder(batch["situational"])  # (B, T, n_embd)
