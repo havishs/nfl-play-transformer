@@ -75,7 +75,13 @@ class PlayDataset(Dataset):
         benefit from paying that cost once. Caller is responsible for using
         a path that reflects the season config (e.g. encoding the seasons
         in the filename) -- this class does not validate that a cached file
-        actually matches the requested seasons.
+        actually matches the requested seasons, OR that it was built with
+        the current version of build_dataset.py/player_features.py. A
+        cached file is just a snapshot of whatever those produced at build
+        time -- if you change what a player dict contains (e.g. adding a
+        field), old caches silently keep the old shape and downstream code
+        expecting the new field will KeyError. Delete the cache file by
+        hand after any change to what build_examples()/lookup() return.
         """
         vocab_seasons = sorted(set(history_seasons) | set(training_seasons))
         # Separate from build_examples()'s own internal PlayerFeatureLookup (which
