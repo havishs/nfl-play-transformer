@@ -9,6 +9,7 @@ pandas<2.0,numpy<1.0 but works fine at runtime against modern versions
 plus requests/appdirs separately, not by relaxing the pin.
 """
 
+import os
 import sys
 
 import nfl_data_py as nfl
@@ -17,6 +18,7 @@ DATA_DIR = "../data"
 
 
 def fetch_season(season, data_dir=DATA_DIR):
+    os.makedirs(data_dir, exist_ok=True)  # data/ is gitignored -- doesn't exist on a fresh clone
     print(f"fetching {season}...")
 
     pbp = nfl.import_pbp_data([season])
