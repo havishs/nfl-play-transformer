@@ -63,6 +63,18 @@ def test_fourth_down_always_punts(simulator):
     assert log[0]["state"].posteam == simulator.team_b  # possession flipped
 
 
+def test_team_form_updates_across_rollout(simulator):
+    # simulator is module-scoped and shared with earlier tests in this file, which
+    # already ran generate() and mutated form_state -- reset so this test's own
+    # "starts empty, ends populated" check is independent of test execution order.
+    simulator.form_state = {}
+    generator = torch.Generator().manual_seed(4)
+    assert simulator.form_state == {}
+    simulator.generate(10, _initial_state(simulator), generator=generator)
+    assert simulator.form_state != {}
+    assert simulator.team_a in simulator.form_state or simulator.team_b in simulator.form_state
+
+
 def test_touchdown_adds_seven_and_flips_possession_via_kickoff(simulator):
     # run several short rollouts and require at least one touchdown to show up
     # somewhere across them, then check its scoring/possession bookkeeping

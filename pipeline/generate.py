@@ -35,6 +35,7 @@ import torch
 from torch.nn import functional as F
 
 import situational as sit
+import team_form as tf
 
 PUNT_NET_YARDS = 40
 TOUCHBACK_YARDLINE_100 = 75  # own 25, standard touchback spot
@@ -176,6 +177,7 @@ class GameSimulator:
         self.team_a_personnel = (seed["offense"], seed["defense"])
         self.team_b = seed["situational"]["defteam"]
         self.team_b_personnel = (seed["defense"], seed["offense"])
+        self.form_state = tf.initial_team_form()
 
     def _personnel_for(self, posteam):
         # Personnel is a fixed snapshot (no substitution/in-game-form modeling, per
@@ -203,6 +205,9 @@ class GameSimulator:
             "defense_features": def_feat,
             "defense_history": def_hist,
             "defense_history_mask": def_hist_mask,
+            "team_form": torch.tensor(
+                tf.team_form_features(self.form_state, state.posteam, state.defteam), dtype=torch.float32
+            ),
         }
 
     def generate(self, n_plays, initial_state, generator=None):
@@ -247,6 +252,13 @@ class GameSimulator:
             return_label = [k for k, v in return_bucket.items() if v == return_idx][0]
             yards_gained = YARDS_GAINED_BUCKET_MIDPOINT[yards_label]
             return_yards = RETURN_YARDS_BUCKET_MIDPOINT[return_label]
+
+            # state.posteam/state.defteam here are still PRE-play (state isn't
+            # reassigned until the branch below) -- same causal "capture
+            # current, then advance" order build_dataset.py uses.
+            self.form_state = tf.update_team_form(
+                self.form_state, state.posteam, state.defteam, yards_gained, True, touchdown, turnover, True,
+            )
 
             if turnover:
                 state = _apply_turnover(state, yards_gained, return_yards)
