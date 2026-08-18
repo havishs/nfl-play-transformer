@@ -111,6 +111,43 @@ def test_team_form_shape_and_first_play_has_no_history(small_dataset):
     assert ex["team_form"][9].item() == 0.0  # defteam has_td_turnover_history
 
 
+def test_team_form_reflects_prior_plays_not_own_play(small_dataset):
+    # play index 3 of the dataset's first game (2023_01_ARI_WAS, WAS posteam
+    # vs ARI defteam throughout plays 0-3) -- by this point, team_form should
+    # reflect plays 0, 1, and 2's real outcomes, NOT play 3's own outcome.
+    # Real outcomes (from build_dataset.build_targets against the raw 2023
+    # pbp parquet):
+    #   play 0: kickoff, yards_applicable=False, td_turnover_applicable=True,
+    #           touchdown=False, turnover=False
+    #   play 1: run, yards_applicable=True (yards_gained=3), td_turnover_applicable=True,
+    #           touchdown=False, turnover=False
+    #   play 2: pass, yards_applicable=True (yards_gained=6), td_turnover_applicable=True,
+    #           touchdown=False, turnover=False
+    # Replaying team_form.update_team_form() over these three real outcomes
+    # (verified against small_dataset.examples[3]["team_form"] directly):
+    #   yards_ema: play 1 sets it to 3.0 (cold start), play 2 folds in 6 via
+    #     EMA_ALPHA=0.25 -> 0.25*6 + 0.75*3 = 3.75
+    #   touchdown_ema/turnover_ema: all three plays are td_turnover_applicable
+    #     but none had a touchdown/turnover, so both stay 0.0
+    #   has_yards_history: True (set by play 1, the first yards_applicable play)
+    #   has_td_turnover_history: True (set by play 0, the first td_turnover_applicable play)
+    # WAS is both posteam (offense side) and, for ARI's defense side, the
+    # opponent whose outcomes ARI's defense allowed -- so both halves of the
+    # 10-dim vector are identical here.
+    ex = small_dataset[3]
+    team_form = ex["team_form"]
+    assert team_form[0].item() == pytest.approx(3.75)  # posteam yards_ema
+    assert team_form[1].item() == pytest.approx(0.0)   # posteam touchdown_ema
+    assert team_form[2].item() == pytest.approx(0.0)   # posteam turnover_ema
+    assert team_form[3].item() == 1.0                  # posteam has_yards_history
+    assert team_form[4].item() == 1.0                  # posteam has_td_turnover_history
+    assert team_form[5].item() == pytest.approx(3.75)  # defteam yards_ema (allowed)
+    assert team_form[6].item() == pytest.approx(0.0)   # defteam touchdown_ema
+    assert team_form[7].item() == pytest.approx(0.0)   # defteam turnover_ema
+    assert team_form[8].item() == 1.0                  # defteam has_yards_history
+    assert team_form[9].item() == 1.0                  # defteam has_td_turnover_history
+
+
 def test_dataset_masks_are_zero_or_one(small_dataset):
     for i in range(len(small_dataset)):
         targets = small_dataset[i]["targets"]
