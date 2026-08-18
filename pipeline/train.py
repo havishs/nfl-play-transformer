@@ -50,6 +50,10 @@ N_EMBD = 128
 N_HEAD = 4
 N_LAYER = 4
 DROPOUT = 0.1
+# Cap on how extreme a head's loss weight can get relative to the smallest
+# (see docs/superpowers/specs/2026-08-18-loss-rebalancing-design.md) --
+# guards against the instability an earlier, different weighting attempt hit.
+MAX_WEIGHT_RATIO = 10.0
 DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 SEED = 1337
 CHECKPOINT_PATH = "checkpoint.pt"
@@ -179,9 +183,12 @@ def main():
     train_batcher = GameBatcher(dataset, BLOCK_SIZE, game_ids=train_game_ids)
     val_batcher = GameBatcher(dataset, BLOCK_SIZE, game_ids=val_game_ids)
     train_counts = target_label_counts(dataset, train_game_ids)
+    loss_weights = compute_loss_weights(train_counts, max_ratio=MAX_WEIGHT_RATIO)
+    print("loss weights:", {k: round(v, 3) for k, v in loss_weights.items()})
 
     model = GameTransformer(
-        dataset.vocabs, block_size=BLOCK_SIZE, n_embd=N_EMBD, n_head=N_HEAD, n_layer=N_LAYER, dropout=DROPOUT
+        dataset.vocabs, block_size=BLOCK_SIZE, n_embd=N_EMBD, n_head=N_HEAD, n_layer=N_LAYER, dropout=DROPOUT,
+        loss_weights=loss_weights,
     ).to(DEVICE)
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters")
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
@@ -209,6 +216,7 @@ def main():
                         "block_size": BLOCK_SIZE, "n_embd": N_EMBD, "n_head": N_HEAD,
                         "n_layer": N_LAYER, "dropout": DROPOUT,
                     },
+                    "loss_weights": loss_weights,
                     "step": it, "val_loss": val_loss,
                 }, CHECKPOINT_PATH)
 
