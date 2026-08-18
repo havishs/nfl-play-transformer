@@ -37,13 +37,14 @@ BLOCK_SIZE = 32
 BATCH_SIZE = 16
 # 2000 wasn't enough exposure once the training pool grew ~6x (257->1491
 # games): touchdown/turnover stayed exactly pinned to baseline while
-# yards_gained/return_yards improved. Each game now gets proportionally
-# less gradient exposure per step than before, so more steps -- not more
-# data alone -- may be what those two heads need. Best-checkpoint saving
-# below means a too-high value here costs wasted compute, not a worse
-# model, so this is safe to raise.
-MAX_ITERS = 40000
-EVAL_INTERVAL = 500
+# yards_gained/return_yards improved. Raising to 40000 didn't help either --
+# a real run's best checkpoint still landed early (step 5500), with val loss
+# climbing steadily for the remaining 34500 steps (severe overfitting, not
+# under-training). Back to 8000: enough headroom past where the best
+# checkpoint has actually landed, without wasting compute on a range
+# that's now proven to just overfit.
+MAX_ITERS = 8000
+EVAL_INTERVAL = 200
 EVAL_ITERS = 20
 LEARNING_RATE = 3e-4
 N_EMBD = 128
