@@ -54,3 +54,18 @@ def test_unrelated_team_has_no_history():
     state = update_team_form(state, "KC", "SF", 20.0, True, False, False, True)
     feats = team_form_features(state, "DAL", "NYG")
     assert np.all(feats == 0.0)
+
+
+def test_same_team_as_posteam_and_defteam_raises():
+    state = initial_team_form()
+    with pytest.raises(AssertionError):
+        update_team_form(state, "KC", "KC", 10.0, True, False, False, True)
+
+
+def test_turnover_updates_turnover_ema_not_touchdown_ema():
+    state = initial_team_form()
+    state = update_team_form(state, "KC", "SF", 5.0, True, touchdown=False, turnover=True,
+                              td_turnover_applicable=True)
+    feats = team_form_features(state, "KC", "SF")
+    assert feats[1] == 0.0  # touchdown_ema untouched
+    assert feats[2] == 1.0  # turnover_ema == the observed value (bootstrap)
