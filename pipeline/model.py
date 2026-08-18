@@ -30,7 +30,14 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from dataset import HISTORY_FEATURE_DIM, MAX_HISTORY, PERSONNEL_FEATURE_DIM, SITUATIONAL_FIELDS, TEAM_FIELDS
+from dataset import (
+    HISTORY_FEATURE_DIM,
+    MAX_HISTORY,
+    PERSONNEL_FEATURE_DIM,
+    SITUATIONAL_FIELDS,
+    TEAM_FIELDS,
+    TEAM_FORM_FEATURE_DIM,
+)
 
 OUTPUT_HEADS = ["yards_gained", "touchdown", "turnover", "return_yards"]
 
@@ -270,6 +277,18 @@ class SituationalEncoder(nn.Module):
         return sum(self.embeddings[i](situational_idx[..., i]) for i in range(len(self.FIELDS)))
 
 
+class TeamFormEncoder(nn.Module):
+    """ Linear projection of the causal in-game team-form feature vector (see team_form.py). """
+
+    def __init__(self, feature_dim, n_embd):
+        super().__init__()
+        self.proj = nn.Linear(feature_dim, n_embd)
+
+    def forward(self, team_form):
+        # team_form: (..., feature_dim) -> (..., n_embd)
+        return self.proj(team_form)
+
+
 class GameTransformer(nn.Module):
     def __init__(self, vocabs, block_size, n_embd=128, n_head=4, n_layer=4, dropout=0.1, loss_weights=None):
         super().__init__()
@@ -279,6 +298,7 @@ class GameTransformer(nn.Module):
         self.history_encoder = PlayerHistoryEncoder(HISTORY_FEATURE_DIM, MAX_HISTORY, n_embd, n_head, dropout)
         self.nested_attention = NestedPlayAttention(n_embd, n_head, dropout)
         self.situational_encoder = SituationalEncoder(vocabs, n_embd)
+        self.team_form_encoder = TeamFormEncoder(TEAM_FORM_FEATURE_DIM, n_embd)
         self.position_embedding = nn.Embedding(block_size, n_embd)
         self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, dropout) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
@@ -309,10 +329,11 @@ class GameTransformer(nn.Module):
         play_summary = self.nested_attention(offense, defense)  # (B, T, n_embd)
 
         situational = self.situational_encoder(batch["situational"])  # (B, T, n_embd)
+        team_form = self.team_form_encoder(batch["team_form"])  # (B, T, n_embd)
         T = batch["situational"].shape[1]
         pos = self.position_embedding(torch.arange(T, device=batch["situational"].device))  # (T, n_embd)
 
-        x = play_summary + situational + pos
+        x = play_summary + situational + team_form + pos
         x = self.blocks(x)
         x = self.ln_f(x)
 

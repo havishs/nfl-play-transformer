@@ -109,3 +109,20 @@ def test_loss_weights_change_total_loss(small_dataset):
     _, loss_weighted = model_weighted(batch, batch["targets"])
 
     assert loss_weighted.item() != pytest.approx(loss_default.item())
+
+
+def test_team_form_affects_output(small_dataset):
+    torch.manual_seed(0)
+    batch_size, block_size = 4, 8
+    batcher = GameBatcher(small_dataset, block_size=block_size)
+    batch = batcher.get_batch(batch_size, generator=torch.Generator().manual_seed(0))
+
+    model = _tiny_model(small_dataset.vocabs, block_size)
+    model.eval()
+    logits_real, _ = model(batch)
+
+    zeroed_batch = dict(batch)
+    zeroed_batch["team_form"] = torch.zeros_like(batch["team_form"])
+    logits_zeroed, _ = model(zeroed_batch)
+
+    assert not torch.allclose(logits_real["yards_gained"], logits_zeroed["yards_gained"])
