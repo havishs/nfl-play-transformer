@@ -69,3 +69,11 @@ def test_turnover_updates_turnover_ema_not_touchdown_ema():
     feats = team_form_features(state, "KC", "SF")
     assert feats[1] == 0.0  # touchdown_ema untouched
     assert feats[2] == 1.0  # turnover_ema == the observed value (bootstrap)
+
+
+def test_nan_posteam_or_defteam_raises():
+    state = initial_team_form()
+    with pytest.raises(AssertionError):
+        update_team_form(state, float("nan"), "SF", 10.0, True, False, False, True)
+    with pytest.raises(AssertionError):
+        update_team_form(state, "KC", float("nan"), 10.0, True, False, False, True)

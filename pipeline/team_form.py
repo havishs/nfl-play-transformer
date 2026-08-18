@@ -8,6 +8,7 @@ update function. See docs/superpowers/specs/2026-08-18-in-game-team-form-design.
 """
 
 import numpy as np
+import pandas as pd
 
 EMA_ALPHA = 0.25  # recency weight per update -- higher = more reactive to recent plays
 
@@ -55,6 +56,8 @@ def update_team_form(form_state, posteam, defteam, yards_gained, yards_applicabl
     AFTER capturing this play's own team_form_features() -- the update
     reflects what's known starting from the NEXT play, not this one.
     """
+    assert pd.notna(posteam) and pd.notna(defteam), \
+        f"posteam and defteam must both be real values, got posteam={posteam!r} defteam={defteam!r}"
     assert posteam != defteam, f"posteam and defteam must differ, got {posteam!r} for both"
     new_state = dict(form_state)
     posteam_sides = dict(new_state.get(posteam, {"offense": _empty_side(), "defense": _empty_side()}))

@@ -13,7 +13,8 @@ as the brief literally describes: same functional goal, much less risk
 right after getting the base architecture to finally train reliably.
 In-game running form (design point 2) now has a real causal EMA
 (TeamFormEncoder, below, backed by team_form.py) wired into the forward
-pass; generate.py's rollout doesn't feed it live yet (separate task).
+pass, fed by both build_dataset.py (real outcomes) and generate.py's
+rollout (the model's own sampled outcomes) via the same update function.
 
 play_type is intentionally NOT an output head: it's currently only a
 situational *input* field in build_dataset.py's build_targets() (never a
@@ -280,7 +281,17 @@ class SituationalEncoder(nn.Module):
 
 
 class TeamFormEncoder(nn.Module):
-    """ Linear projection of the causal in-game team-form feature vector (see team_form.py). """
+    """
+    Linear projection of the causal in-game team-form feature vector (see
+    team_form.py). Note the input is NOT normalized -- yards_ema can range
+    to +-75 on an explosive play while touchdown_ema/turnover_ema and the
+    two history flags stay in [0, 1], a real scale imbalance relative to
+    e.g. PlayerEncoder's roughly [-3, 3] EPA-based features. A single
+    Linear can in principle learn to downweight the large-magnitude input,
+    but this may slow how quickly this head finds sane weights -- worth
+    watching in early training loss curves, not yet worth a normalization
+    pass on its own.
+    """
 
     def __init__(self, feature_dim, n_embd):
         super().__init__()
