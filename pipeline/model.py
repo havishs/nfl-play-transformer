@@ -11,7 +11,9 @@ addendum for why it's wired in ADDITIVELY (summed into PlayerEncoder's
 per-player embedding) rather than as true encoder-decoder cross-attention
 as the brief literally describes: same functional goal, much less risk
 right after getting the base architecture to finally train reliably.
-In-game running form (design point 2) is still STUBBED -- not built yet.
+In-game running form (design point 2) now has a real causal EMA
+(TeamFormEncoder, below, backed by team_form.py) wired into the forward
+pass; generate.py's rollout doesn't feed it live yet (separate task).
 
 play_type is intentionally NOT an output head: it's currently only a
 situational *input* field in build_dataset.py's build_targets() (never a
