@@ -3,6 +3,7 @@ from dataclasses import replace
 import torch
 import pytest
 
+import team_form as tf
 from dataset import PlayDataset
 from generate import GameSimulator, GameState
 from model import GameTransformer
@@ -74,6 +75,14 @@ def test_team_form_updates_across_rollout(simulator):
     assert simulator.form_state != {}
     assert simulator.team_a in simulator.form_state or simulator.team_b in simulator.form_state
 
+    # A non-empty dict alone doesn't prove the state actually evolved from real
+    # play outcomes -- confirm at least one team's OFFENSE side picked up real
+    # history (both the yards-EMA and touchdown/turnover-EMA history flags),
+    # which only happens once update_team_form has actually been fed a play.
+    features_a = tf.team_form_features(simulator.form_state, simulator.team_a, simulator.team_b)
+    features_b = tf.team_form_features(simulator.form_state, simulator.team_b, simulator.team_a)
+    assert (features_a[3] == 1.0 and features_a[4] == 1.0) or (features_b[3] == 1.0 and features_b[4] == 1.0)
+
 
 def test_touchdown_adds_seven_and_flips_possession_via_kickoff(simulator):
     # run several short rollouts and require at least one touchdown to show up
@@ -94,3 +103,77 @@ def test_touchdown_adds_seven_and_flips_possession_via_kickoff(simulator):
                 return
             prev_state = entry["state"]
     pytest.fail("expected at least one touchdown across sampled rollouts")
+
+
+def test_team_form_credits_preplay_team_on_turnover(simulator, monkeypatch):
+    # The single most subtle correctness point in the team-form wiring: a play's
+    # outcome must be attributed to whichever team was on offense BEFORE the play
+    # (state.posteam pre-play), not the team that ends up on offense afterward --
+    # which, for a turnover, is the OPPOSITE team (possession flips).
+    #
+    # generate()'s log only records the state AFTER each play, and doesn't expose
+    # intermediate form_state snapshots -- so instead of trying to replay/reconstruct
+    # snapshots from outside, we spy directly on team_form.update_team_form (still
+    # delegating to the real implementation) and record exactly what it was called
+    # with each time. That's the actual call generate.py makes, so comparing those
+    # recorded arguments against the log's pre-play state is a direct test of the
+    # causal-ordering invariant, not an inference from side effects.
+    real_update = tf.update_team_form
+    calls = []
+
+    def spy_update(form_state, posteam, defteam, *args, **kwargs):
+        new_state = real_update(form_state, posteam, defteam, *args, **kwargs)
+        calls.append({"posteam": posteam, "defteam": defteam, "before": form_state, "after": new_state})
+        return new_state
+
+    monkeypatch.setattr(tf, "update_team_form", spy_update)
+
+    for seed in range(10):
+        calls.clear()
+        simulator.form_state = {}
+        initial = _initial_state(simulator)
+        log = simulator.generate(30, initial, generator=torch.Generator().manual_seed(seed))
+
+        prev_state = initial
+        call_idx = 0
+        for entry in log:
+            if entry["event"] == "punt":
+                # punts short-circuit before the model/team_form step -- no call made
+                prev_state = entry["state"]
+                continue
+
+            call = calls[call_idx]
+            call_idx += 1
+
+            # update_team_form must always be called with the state as it was
+            # BEFORE this play (prev_state), never the state logged AFTER it.
+            assert call["posteam"] == prev_state.posteam
+            assert call["defteam"] == prev_state.defteam
+
+            if entry["event"] == "turnover":
+                post_state = entry["state"]
+                # Possession has flipped in the log's post-play state. The credited
+                # posteam must be the PRE-play team, which is now the post-play
+                # DEFENSE -- not the post-play offense.
+                assert call["posteam"] == post_state.defteam
+                assert call["posteam"] != post_state.posteam
+
+                # The pre-play team's own offense side picked up real history from
+                # this exact call.
+                credited_after = tf.team_form_features(call["after"], call["posteam"], call["defteam"])
+                assert credited_after[3] == 1.0  # has_yards_history
+                assert credited_after[4] == 1.0  # has_td_turnover_history
+
+                # And the OTHER team (post-play posteam, i.e. the team that only
+                # ends up on offense as a result of the turnover) must NOT have had
+                # its offense side touched by this call -- proving the update went
+                # to the team that actually ran the play, not the team the flip
+                # left on offense afterward.
+                other_before = tf.team_form_features(call["before"], call["defteam"], call["posteam"])[:5]
+                other_after = tf.team_form_features(call["after"], call["defteam"], call["posteam"])[:5]
+                assert list(other_before) == list(other_after)
+                return
+
+            prev_state = entry["state"]
+
+    pytest.fail("expected at least one turnover across sampled rollouts")
