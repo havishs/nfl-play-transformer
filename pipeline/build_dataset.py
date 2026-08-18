@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 import situational as sit
+import team_form as tf
 from player_features import PlayerFeatureLookup
 
 
@@ -88,17 +89,25 @@ def build_examples(history_seasons, training_seasons, data_dir="../data", max_ex
     examples = []
     for game_id, game in pbp.groupby("game_id"):
         game = game.sort_values("play_id")
+        form_state = tf.initial_team_form()
         for _, row in game.iterrows():
             offense, defense = build_personnel(row, lookup)
+            targets = build_targets(row)
             examples.append({
                 "game_id": game_id,
                 "play_id": row["play_id"],
                 "week": int(row["week"]),
                 "situational": build_situational(row),
-                "targets": build_targets(row),
+                "targets": targets,
                 "offense": offense,
                 "defense": defense,
+                "team_form": tf.team_form_features(form_state, row["posteam"], row["defteam"]),
             })
+            form_state = tf.update_team_form(
+                form_state, row["posteam"], row["defteam"], row["yards_gained"],
+                targets["yards_gained_applicable"], targets["touchdown"], targets["turnover"],
+                targets["td_turnover_applicable"],
+            )
             if max_examples and len(examples) >= max_examples:
                 return examples
     return examples

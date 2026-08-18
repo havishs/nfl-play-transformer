@@ -7,6 +7,7 @@ import vocab as V
 from dataset import (
     N_PERSONNEL,
     PERSONNEL_FEATURE_DIM,
+    TEAM_FORM_FEATURE_DIM,
     PlayDataset,
     _pad_personnel,
     _personnel_slot_to_vectors,
@@ -96,6 +97,18 @@ def test_dataset_item_shapes(small_dataset):
     assert ex["offense_features"].shape == (N_PERSONNEL, PERSONNEL_FEATURE_DIM)
     assert ex["defense_position"].shape == (N_PERSONNEL,)
     assert ex["defense_features"].shape == (N_PERSONNEL, PERSONNEL_FEATURE_DIM)
+
+
+def test_team_form_shape_and_first_play_has_no_history(small_dataset):
+    ex = small_dataset[0]
+    assert ex["team_form"].shape == (TEAM_FORM_FEATURE_DIM,)
+    assert ex["team_form"].dtype == torch.float32
+    # first play of the dataset's first game -- neither team has any prior
+    # plays in this game yet, so both cold-start flags must be 0.
+    assert ex["team_form"][3].item() == 0.0  # posteam has_yards_history
+    assert ex["team_form"][4].item() == 0.0  # posteam has_td_turnover_history
+    assert ex["team_form"][8].item() == 0.0  # defteam has_yards_history
+    assert ex["team_form"][9].item() == 0.0  # defteam has_td_turnover_history
 
 
 def test_dataset_masks_are_zero_or_one(small_dataset):

@@ -35,6 +35,8 @@ PERSONNEL_FEATURE_DIM = len(BIO_KEYS) + len(OFF_KEYS) + len(DEF_KEYS) + 3
 MAX_HISTORY = 16  # ~1 season of games, per player, for the learned history encoder
 HISTORY_FEATURE_DIM = len(OFF_KEYS) + len(DEF_KEYS)
 
+TEAM_FORM_FEATURE_DIM = 10  # 5 per side (posteam offense, defteam defense) -- see team_form.py
+
 
 def _pad_personnel(players, n=N_PERSONNEL):
     """
@@ -147,6 +149,9 @@ class PlayDataset(Dataset):
                 masks.append(mask)
         return torch.tensor(np.stack(seqs), dtype=torch.float32), torch.tensor(np.stack(masks), dtype=torch.bool)
 
+    def _team_form_tensor(self, team_form):
+        return torch.tensor(team_form, dtype=torch.float32)
+
     def _target_tensors(self, targets):
         def idx_and_mask(value, vocab_name):
             if value is None:
@@ -187,5 +192,6 @@ class PlayDataset(Dataset):
             "defense_features": def_feats,
             "defense_history": def_hist,
             "defense_history_mask": def_hist_mask,
+            "team_form": self._team_form_tensor(ex["team_form"]),
             "targets": self._target_tensors(ex["targets"]),
         }
