@@ -11,6 +11,7 @@ elsewhere (PlayerFeatureLookup, bucket boundaries) -- validate on what the
 model hasn't seen yet in time, not a random shuffle.
 """
 
+import math
 from collections import Counter
 
 import torch
@@ -127,6 +128,39 @@ def majority_baseline_accuracy(counts):
         total = sum(c.values())
         baseline[name] = (max(c.values()) / total) if total else float("nan")
     return baseline
+
+def compute_loss_weights(counts, max_ratio=10.0):
+    """
+    Per-head loss weight = 1 / entropy of that head's true label
+    distribution -- the distribution-blind constant predictor's optimal
+    expected loss, and therefore the right "no-signal floor" to normalize
+    against. Skewed heads (touchdown/turnover) get a naturally larger raw
+    weight than heads with more uniform label distributions (yards_gained/
+    return_yards), which is exactly the imbalance this is meant to correct
+    -- touchdown/turnover's own loss is otherwise too small in magnitude to
+    meaningfully affect gradient descent when summed with the other heads.
+
+    Raw weights are capped so the largest is at most `max_ratio` times the
+    smallest (guards against the instability an earlier, different
+    weighting attempt hit -- see docs/superpowers/specs/
+    2026-08-18-loss-rebalancing-design.md), then rescaled so the mean
+    weight is exactly 1.0, keeping total loss magnitude comparable to an
+    unweighted sum so LEARNING_RATE doesn't silently need retuning.
+    """
+    raw_weights = {}
+    for name, counter in counts.items():
+        total = sum(counter.values())
+        entropy = 0.0
+        for count in counter.values():
+            p = count / total
+            entropy -= p * math.log(p)
+        raw_weights[name] = 1.0 / entropy
+
+    min_weight = min(raw_weights.values())
+    capped = {name: min(w, min_weight * max_ratio) for name, w in raw_weights.items()}
+
+    mean_weight = sum(capped.values()) / len(capped)
+    return {name: w / mean_weight for name, w in capped.items()}
 
 
 def main():
