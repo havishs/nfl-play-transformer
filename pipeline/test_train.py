@@ -35,3 +35,12 @@ def test_weights_always_have_mean_one():
 
     mean_weight = sum(weights.values()) / len(weights)
     assert mean_weight == pytest.approx(1.0, abs=1e-6)
+
+
+def test_degenerate_distribution_raises_clear_error():
+    counts = {
+        "touchdown": {0: 100},
+        "yards_gained": {i: 1000 for i in range(7)},
+    }
+    with pytest.raises(ValueError, match="touchdown"):
+        compute_loss_weights(counts)

@@ -53,6 +53,8 @@ DROPOUT = 0.1
 # Cap on how extreme a head's loss weight can get relative to the smallest
 # (see docs/superpowers/specs/2026-08-18-loss-rebalancing-design.md) --
 # guards against the instability an earlier, different weighting attempt hit.
+# Not yet empirically validated against a real run -- revisit if
+# touchdown/turnover still don't move.
 MAX_WEIGHT_RATIO = 10.0
 DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 SEED = 1337
@@ -133,6 +135,7 @@ def majority_baseline_accuracy(counts):
         baseline[name] = (max(c.values()) / total) if total else float("nan")
     return baseline
 
+
 def compute_loss_weights(counts, max_ratio=10.0):
     """
     Per-head loss weight = 1 / entropy of that head's true label
@@ -158,6 +161,10 @@ def compute_loss_weights(counts, max_ratio=10.0):
         for count in counter.values():
             p = count / total
             entropy -= p * math.log(p)
+        if entropy == 0:
+            raise ValueError(
+                f"head {name!r} has a degenerate label distribution (entropy=0); can't compute a loss weight"
+            )
         raw_weights[name] = 1.0 / entropy
 
     min_weight = min(raw_weights.values())
@@ -184,7 +191,7 @@ def main():
     val_batcher = GameBatcher(dataset, BLOCK_SIZE, game_ids=val_game_ids)
     train_counts = target_label_counts(dataset, train_game_ids)
     loss_weights = compute_loss_weights(train_counts, max_ratio=MAX_WEIGHT_RATIO)
-    print("loss weights:", {k: round(v, 3) for k, v in loss_weights.items()})
+    print(f"loss weights: {', '.join(f'{k}={v:.3f}' for k, v in loss_weights.items())}")
 
     model = GameTransformer(
         dataset.vocabs, block_size=BLOCK_SIZE, n_embd=N_EMBD, n_head=N_HEAD, n_layer=N_LAYER, dropout=DROPOUT,

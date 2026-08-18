@@ -274,7 +274,7 @@ class GameTransformer(nn.Module):
     def __init__(self, vocabs, block_size, n_embd=128, n_head=4, n_layer=4, dropout=0.1, loss_weights=None):
         super().__init__()
         self.block_size = block_size
-        self.loss_weights = loss_weights or {name: 1.0 for name in OUTPUT_HEADS}
+        self.loss_weights = loss_weights if loss_weights is not None else {name: 1.0 for name in OUTPUT_HEADS}
         self.player_encoder = PlayerEncoder(len(vocabs["position"]), PERSONNEL_FEATURE_DIM, n_embd)
         self.history_encoder = PlayerHistoryEncoder(HISTORY_FEATURE_DIM, MAX_HISTORY, n_embd, n_head, dropout)
         self.nested_attention = NestedPlayAttention(n_embd, n_head, dropout)
