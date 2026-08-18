@@ -41,8 +41,8 @@ BATCH_SIZE = 16
 # data alone -- may be what those two heads need. Best-checkpoint saving
 # below means a too-high value here costs wasted compute, not a worse
 # model, so this is safe to raise.
-MAX_ITERS = 8000
-EVAL_INTERVAL = 200
+MAX_ITERS = 40000
+EVAL_INTERVAL = 500
 EVAL_ITERS = 20
 LEARNING_RATE = 3e-4
 N_EMBD = 128
