@@ -360,10 +360,11 @@ def test_team_form_updates_across_rollout(simulator):
     assert (features_a[3] == 1.0 and features_a[4] == 1.0) or (features_b[3] == 1.0 and features_b[4] == 1.0)
 
 
-def test_touchdown_adds_seven_and_flips_possession_via_kickoff(simulator):
+def test_touchdown_adds_six_or_seven_and_flips_possession_via_kickoff(simulator):
     # run several short rollouts and require at least one touchdown to show up
     # somewhere across them, then check its scoring/possession bookkeeping
-    # against the immediately preceding state.
+    # against the immediately preceding state. +6 (missed XP) or +7 (made XP)
+    # are both valid now that the extra point can miss.
     for seed in range(10):
         initial = _initial_state(simulator)
         log = simulator.generate(30, initial, generator=torch.Generator().manual_seed(seed))
@@ -373,12 +374,38 @@ def test_touchdown_adds_seven_and_flips_possession_via_kickoff(simulator):
                 s = entry["state"]
                 # the team that just scored is now the DEFENSE (post-kickoff,
                 # possession flipped to the team that got scored on)
-                assert s.defteam_score == prev_state.posteam_score + 7
+                assert s.defteam_score in (prev_state.posteam_score + 6, prev_state.posteam_score + 7)
                 assert s.posteam_score == prev_state.defteam_score
                 assert s.down == 1 and s.ydstogo == 10
                 return
             prev_state = entry["state"]
     pytest.fail("expected at least one touchdown across sampled rollouts")
+
+
+def test_extra_point_can_miss(simulator):
+    # run several short rollouts and require both a made and a missed XP to
+    # show up somewhere across them -- confirms XP_SUCCESS_RATE < 1.0 is
+    # actually exercised, not just declared.
+    #
+    # NOTE: this checks each touchdown's score INCREMENT (state.defteam_score
+    # minus the immediately preceding state's posteam_score), not the raw
+    # cumulative score. Raw cumulative score is a vacuous check here: a
+    # team's first touchdown of a game always lands on exactly 7 even under
+    # the old always-+7 behavior, so "seen_scores & {6, 7}" would trivially
+    # pass forever regardless of whether XP misses are actually modeled.
+    import random
+    increments = set()
+    for seed in range(30):
+        random.seed(seed)
+        initial = _initial_state(simulator)
+        log = simulator.generate(30, initial, generator=torch.Generator().manual_seed(seed))
+        prev_state = initial
+        for entry in log:
+            if entry["event"] == "touchdown":
+                s = entry["state"]
+                increments.add(s.defteam_score - prev_state.posteam_score)  # 6 (missed XP) or 7 (made XP)
+            prev_state = entry["state"]
+    assert increments == {6, 7}, f"expected both a missed (+6) and made (+7) extra point, got increments {increments}"
 
 
 def test_team_form_credits_preplay_team_on_turnover(simulator, monkeypatch):

@@ -184,8 +184,17 @@ def _kickoff_after_score(state):
     )
 
 
+XP_SUCCESS_RATE = 0.942  # real 2018-2023 XP make rate -- fixed since XP distance doesn't vary by kicker
+
+
+def _attempt_extra_point(state):
+    made = random.random() < XP_SUCCESS_RATE
+    return replace(state, posteam_score=state.posteam_score + (1 if made else 0))
+
+
 def _apply_touchdown(state):
-    scored = replace(state, posteam_score=state.posteam_score + 7)  # assume automatic XP, no 2pt decision modeled
+    scored = replace(state, posteam_score=state.posteam_score + 6)
+    scored = _attempt_extra_point(scored)  # no 2pt decision modeled, matches existing simplification
     return _kickoff_after_score(scored)
 
 
