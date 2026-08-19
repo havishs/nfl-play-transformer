@@ -24,6 +24,9 @@ def load_special_teams_plays(seasons, data_dir="../data"):
     pbp["order_key"] = _order_key(pbp["season"], pbp["week"])
 
     fg = pbp[pbp["play_type"] == "field_goal"].copy()
+    # field_goal_result is always made/missed/blocked in the real data checked
+    # (2018-2023, zero nulls) -- a null/unexpected value would silently count
+    # as a miss here, not excluded; not currently reachable but worth noting.
     fg["made"] = (fg["field_goal_result"] == "made").astype(float)
 
     punt = pbp[pbp["play_type"] == "punt"].copy()
@@ -79,14 +82,25 @@ class SpecialTeamsFeatureLookup:
         return None if pd.isna(value) else float(value)
 
     def primary_kicker(self, team, season):
-        """Most frequent real kicker_player_id for `team` in `season`'s own pbp. None if team has no FG attempts that season."""
+        """
+        Most frequent real kicker_player_id for `team` in `season`'s own pbp.
+        None if team has no FG attempts that season. NOT causal by week --
+        uses the whole season's data, since this resolves a roster identity
+        (who kicks for this team), not a stat with a leakage concern. A
+        mid-season kicker change means an early-week query could return the
+        season's overall most-used kicker rather than who was kicking then.
+        """
         team_fg = self.fg[(self.fg["posteam"] == team) & (self.fg["season"] == season)]
         if not len(team_fg):
             return None
         return team_fg["kicker_player_id"].mode().iloc[0]
 
     def primary_punter(self, team, season):
-        """Most frequent real punter_player_id for `team` in `season`'s own pbp. None if team has no punts that season."""
+        """
+        Most frequent real punter_player_id for `team` in `season`'s own pbp.
+        None if team has no punts that season. NOT causal by week -- same
+        reasoning as primary_kicker's docstring.
+        """
         team_punt = self.punt[(self.punt["posteam"] == team) & (self.punt["season"] == season)]
         if not len(team_punt):
             return None
