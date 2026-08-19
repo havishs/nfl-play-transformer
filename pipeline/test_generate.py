@@ -157,6 +157,16 @@ def test_attempt_field_goal_certain_miss_flips_possession_no_points():
     assert new_state.posteam == "SF"  # possession flipped
 
 
+def test_apply_turnover_on_downs_flips_possession_no_return():
+    from generate import GameState, _apply_turnover_on_downs
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=5, yardline_100=40,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state = _apply_turnover_on_downs(state, yards_gained=2)  # short of the marker
+    assert new_state.posteam == "SF"  # possession flipped
+    assert new_state.down == 1 and new_state.ydstogo == 10
+    assert new_state.yardline_100 == 100 - (40 - 2)  # spot of the play, no return
+
+
 def test_team_form_updates_across_rollout(simulator):
     # simulator is module-scoped and shared with earlier tests in this file, which
     # already ran generate() and mutated form_state -- reset so this test's own

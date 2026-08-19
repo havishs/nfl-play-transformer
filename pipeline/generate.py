@@ -194,6 +194,16 @@ def _apply_turnover(state, yards_gained, return_yards):
     )
 
 
+def _apply_turnover_on_downs(state, yards_gained):
+    """4th down, didn't convert: possession flips at the spot, no return (mirrors _apply_turnover's math with return_yards=0)."""
+    spot_from_old_posteam = state.yardline_100 - yards_gained
+    new_yardline_100 = min(99, max(1, 100 - spot_from_old_posteam))
+    return state.flip_possession(
+        down=1, ydstogo=10, yardline_100=new_yardline_100,
+        play_in_quarter=state.play_in_quarter + 1,
+    )
+
+
 def _normalize_quarter(state):
     if state.play_in_quarter >= PLAYS_PER_QUARTER:
         return replace(state, quarter=state.quarter + 1, play_in_quarter=0)
@@ -340,6 +350,9 @@ class GameSimulator:
             elif touchdown:
                 state = _apply_touchdown(state)
                 event = "touchdown"
+            elif state.down == 4 and (state.ydstogo - yards_gained) > 0:
+                state = _apply_turnover_on_downs(state, yards_gained)
+                event = "turnover_on_downs"
             else:
                 state = _apply_scrimmage_gain(state, yards_gained)
                 event = "gain"
