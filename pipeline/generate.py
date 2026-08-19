@@ -305,10 +305,9 @@ class GameSimulator:
                     continue
                 # decision == "go": fall through to the normal model-driven
                 # scrimmage-play flow below, same as any other down. A
-                # failed conversion currently produces an invalid down=5
-                # state (_apply_scrimmage_gain just increments down) --
-                # this is a known, deferred gap, fixed by the very next
-                # task in this plan (turnover-on-downs), not a bug to chase here.
+                # non-converting result is handled by the
+                # turnover_on_downs branch further down in the outcome
+                # dispatch (state.down == 4 and it wasn't a score/turnover).
 
             play_type = random.choices(
                 list(PASS_RUN_WEIGHTS), weights=list(PASS_RUN_WEIGHTS.values())

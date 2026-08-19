@@ -167,6 +167,64 @@ def test_apply_turnover_on_downs_flips_possession_no_return():
     assert new_state.yardline_100 == 100 - (40 - 2)  # spot of the play, no return
 
 
+def test_apply_turnover_on_downs_handles_a_loss_on_the_play():
+    from generate import GameState, _apply_turnover_on_downs
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=2, yardline_100=40,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state = _apply_turnover_on_downs(state, yards_gained=-3)  # stuffed for a loss
+    assert new_state.posteam == "SF"
+    assert new_state.yardline_100 == 100 - (40 - (-3))
+
+
+def test_exact_conversion_does_not_trigger_turnover_on_downs():
+    # yards_gained == ydstogo exactly (converts to the marker) must fall to
+    # the normal _apply_scrimmage_gain path (which itself resets to down=1),
+    # NOT the turnover_on_downs branch -- confirms the ">0" boundary is right,
+    # not an off-by-one that would (dis)qualify an exact conversion.
+    from generate import GameState, _apply_scrimmage_gain
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=5, yardline_100=40,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    # this directly mirrors what generate()'s branch condition would decide:
+    # (state.ydstogo - yards_gained) > 0 must be False here
+    yards_gained = 5
+    assert not (state.ydstogo - yards_gained) > 0
+    new_state = _apply_scrimmage_gain(state, yards_gained)
+    assert new_state.posteam == "KC"  # possession did NOT flip
+    assert new_state.down == 1  # converted to a first down
+
+
+def test_generate_can_produce_turnover_on_downs(simulator, monkeypatch):
+    import generate as gen_module
+    from generate import GameState
+
+    # Force every model-sampled outcome to a small, non-converting,
+    # non-scoring gain -- a deterministic path to a real turnover_on_downs
+    # event through the FULL generate() loop (not just the pure function).
+    no_gain_idx = simulator.dataset.vocabs["yards_gained"]["no_gain"]
+    none_return_idx = simulator.dataset.vocabs["return_yards"]["none"]
+    yards_vocab_size = len(simulator.dataset.vocabs["yards_gained"])
+    return_vocab_size = len(simulator.dataset.vocabs["return_yards"])
+
+    def fake_sample_class(logits, generator):
+        n_classes = logits.shape[-1]
+        if n_classes == yards_vocab_size:
+            return no_gain_idx
+        if n_classes == return_vocab_size:
+            return none_return_idx
+        return 0  # touchdown/turnover binary heads -> False
+
+    monkeypatch.setattr(gen_module, "_sample_class", fake_sample_class)
+
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=1, yardline_100=65,
+                       posteam=simulator.team_a, defteam=simulator.team_b,
+                       posteam_score=0, defteam_score=0)
+    log = simulator.generate(1, state, generator=torch.Generator().manual_seed(0))
+
+    assert len(log) == 1
+    assert log[0]["event"] == "turnover_on_downs"
+    assert 1 <= log[0]["state"].down <= 4
+
+
 def test_team_form_updates_across_rollout(simulator):
     # simulator is module-scoped and shared with earlier tests in this file, which
     # already ran generate() and mutated form_state -- reset so this test's own
