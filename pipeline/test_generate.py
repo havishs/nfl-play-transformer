@@ -393,10 +393,8 @@ def test_extra_point_can_miss(simulator):
     # team's first touchdown of a game always lands on exactly 7 even under
     # the old always-+7 behavior, so "seen_scores & {6, 7}" would trivially
     # pass forever regardless of whether XP misses are actually modeled.
-    import random
     increments = set()
     for seed in range(30):
-        random.seed(seed)
         initial = _initial_state(simulator)
         log = simulator.generate(30, initial, generator=torch.Generator().manual_seed(seed))
         prev_state = initial

@@ -210,14 +210,14 @@ def _kickoff_after_score(state):
 XP_SUCCESS_RATE = 0.942  # real 2018-2023 XP make rate -- fixed since XP distance doesn't vary by kicker
 
 
-def _attempt_extra_point(state):
-    made = random.random() < XP_SUCCESS_RATE
+def _attempt_extra_point(state, generator):
+    made = _rand(generator) < XP_SUCCESS_RATE
     return replace(state, posteam_score=state.posteam_score + (1 if made else 0))
 
 
-def _apply_touchdown(state):
+def _apply_touchdown(state, generator):
     scored = replace(state, posteam_score=state.posteam_score + 6)
-    scored = _attempt_extra_point(scored)  # no 2pt decision modeled, matches existing simplification
+    scored = _attempt_extra_point(scored, generator)  # no 2pt decision modeled, matches existing simplification
     return _kickoff_after_score(scored)
 
 
@@ -400,7 +400,7 @@ class GameSimulator:
                 state = _apply_turnover(state, yards_gained, return_yards)
                 event = "turnover"
             elif touchdown:
-                state = _apply_touchdown(state)
+                state = _apply_touchdown(state, generator)
                 event = "touchdown"
             elif state.down == 4 and (state.ydstogo - yards_gained) > 0:
                 state = _apply_turnover_on_downs(state, yards_gained)
