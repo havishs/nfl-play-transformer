@@ -14,6 +14,7 @@ from win_prob_eval import (
     evaluate,
     game_rows,
     load_pbp_for_seasons,
+    real_form_state_before,
     real_outcome,
     real_state_at_quarter_start,
     rollout_outcome,
@@ -108,6 +109,36 @@ def test_real_state_at_quarter_start_matches_real_2023_pbp_for_a_known_game():
     assert state.defteam_score == int(expected["defteam_score"])
 
 
+def test_real_form_state_before_returns_empty_for_q1():
+    # Q1 legitimately starts empty -- no real plays precede it.
+    game_df = pd.DataFrame([
+        _pbp_row(play_id=1.0, qtr=1.0, down=1.0, play_type="run", posteam="KC", defteam="SF",
+                 yards_gained=5.0, touchdown=0.0, interception=0.0, fumble_lost=0.0),
+    ])
+    assert real_form_state_before(game_df, quarter=1) == tf.initial_team_form()
+
+
+def test_real_form_state_before_replays_real_prior_plays_for_a_later_quarter():
+    game_df = pd.DataFrame([
+        _pbp_row(play_id=1.0, qtr=1.0, down=1.0, play_type="run", posteam="KC", defteam="SF",
+                 yards_gained=5.0, touchdown=0.0, interception=0.0, fumble_lost=0.0),
+        # the Q2 kickoff row itself (down is null) should also be replayed --
+        # it precedes the cutoff (Q2's first real scrimmage play) by play_id
+        _pbp_row(play_id=2.0, qtr=2.0, down=float("nan"), play_type="kickoff", posteam="SF", defteam="KC",
+                 yards_gained=0.0, touchdown=0.0, interception=0.0, fumble_lost=0.0),
+        _pbp_row(play_id=3.0, qtr=2.0, down=1.0, play_type="pass", posteam="KC", defteam="SF",
+                 yards_gained=3.0, touchdown=0.0, interception=0.0, fumble_lost=0.0),
+    ])
+    form_state = real_form_state_before(game_df, quarter=2)
+    # Only row 1 and row 2 (play_id < 3, the Q2 cutoff) should be reflected --
+    # row 3 (the Q2 starting point itself) must NOT be replayed.
+    assert form_state != tf.initial_team_form()
+    assert form_state["KC"]["offense"]["has_yards_history"] is True
+    assert form_state["KC"]["offense"]["yards_ema"] == pytest.approx(5.0)
+    assert form_state["SF"]["defense"]["has_yards_history"] is True
+    assert form_state["SF"]["defense"]["yards_ema"] == pytest.approx(5.0)
+
+
 def _game_row(**overrides):
     base = {"home_team": "KC", "away_team": "SF", "home_score": 24.0, "away_score": 20.0}
     base.update(overrides)
@@ -181,7 +212,8 @@ def test_win_probability_tallies_wins_and_unresolved_as_half_credit(monkeypatch)
             return [{"event": "gain", "state": state}]
 
     initial = _final_state()
-    p_hat = win_probability(FakeSim(), initial, n_rollouts=3, base_seed=0, max_plays=10)
+    p_hat = win_probability(FakeSim(), initial, n_rollouts=3, base_seed=0, max_plays=10,
+                             initial_form_state=tf.initial_team_form())
     # 1 team_a win (1.0) + 1 team_b win (0.0) + 1 unresolved (0.5) = 1.5 / 3
     assert p_hat == pytest.approx(0.5)
 
@@ -202,11 +234,13 @@ def test_win_probability_final_form_state_matches_a_single_fresh_rollout(simulat
         quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
         posteam=simulator.team_a, defteam=simulator.team_b, posteam_score=0, defteam_score=0,
     )
+    initial_form_state = tf.initial_team_form()
 
-    win_probability(simulator, initial_state, n_rollouts=3, base_seed=0, max_plays=10)
+    win_probability(simulator, initial_state, n_rollouts=3, base_seed=0, max_plays=10,
+                     initial_form_state=initial_form_state)
     form_state_after_three = simulator.form_state
 
-    simulator.form_state = tf.initial_team_form()
+    simulator.form_state = initial_form_state
     generator = torch.Generator().manual_seed(0 + 2)  # base_seed + (n_rollouts - 1)
     simulator.generate(10, initial_state, generator=generator)
     form_state_after_one_matching_seed = simulator.form_state
@@ -214,14 +248,41 @@ def test_win_probability_final_form_state_matches_a_single_fresh_rollout(simulat
     assert form_state_after_three == form_state_after_one_matching_seed
 
 
-def test_state_seed_is_deterministic_and_varies_by_game_and_quarter():
-    a = state_seed("2023_01_KC_SF", 1)
-    b = state_seed("2023_01_KC_SF", 1)
-    c = state_seed("2023_01_KC_SF", 2)
-    d = state_seed("2023_02_KC_SF", 1)
+def test_win_probability_does_not_mutate_the_initial_form_state_it_is_given(simulator):
+    # win_probability reassigns the SAME initial_form_state dict object to
+    # sim.form_state at the top of every rollout, rather than a copy. That's
+    # only safe because team_form.update_team_form() always returns a new
+    # dict instead of mutating its input -- confirm the object handed in is
+    # untouched after a full win_probability() call, and that calling it
+    # twice with the same initial_form_state produces the same result both
+    # times (proving neither call left contamination behind for the other).
+    initial_state = GameState(
+        quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
+        posteam=simulator.team_a, defteam=simulator.team_b, posteam_score=0, defteam_score=0,
+    )
+    initial_form_state = tf.initial_team_form()
+    snapshot_before = dict(initial_form_state)
+
+    p_hat_first = win_probability(simulator, initial_state, n_rollouts=3, base_seed=0, max_plays=10,
+                                   initial_form_state=initial_form_state)
+    assert initial_form_state == snapshot_before
+
+    p_hat_second = win_probability(simulator, initial_state, n_rollouts=3, base_seed=0, max_plays=10,
+                                    initial_form_state=initial_form_state)
+    assert initial_form_state == snapshot_before
+    assert p_hat_first == p_hat_second
+
+
+def test_state_seed_is_deterministic_and_varies_by_game_quarter_and_seed():
+    a = state_seed(1, "2023_01_KC_SF", 1)
+    b = state_seed(1, "2023_01_KC_SF", 1)
+    c = state_seed(1, "2023_01_KC_SF", 2)
+    d = state_seed(1, "2023_02_KC_SF", 1)
+    e = state_seed(2, "2023_01_KC_SF", 1)
     assert a == b
     assert a != c
     assert a != d
+    assert a != e
 
 
 def test_sample_validation_games_is_deterministic(small_dataset):
@@ -281,7 +342,7 @@ def test_evaluate_end_to_end_smoke(small_dataset):
 
     records_by_quarter, csv_rows, skipped = evaluate(
         model, small_dataset, pbp, [game_id], device="cpu",
-        rollouts_per_state=3, max_plays=15,
+        rollouts_per_state=3, max_plays=200,
     )
 
     total_points = sum(len(v) for v in records_by_quarter.values())

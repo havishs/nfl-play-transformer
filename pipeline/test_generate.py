@@ -639,6 +639,27 @@ def test_long_rollout_with_real_special_teams_data_holds_invariants(small_datase
             assert {s.posteam, s.defteam} == {sim.team_a, sim.team_b}
 
 
+def test_full_rollout_is_reproducible_from_the_same_seed(simulator):
+    # Exercises the actual headline guarantee Part 1 was built to establish:
+    # a full rollout (including special-teams branches: punt/FG/XP) is
+    # reproducible from (game, state, seed) alone. 300 plays (matching
+    # test_long_rollout_with_real_special_teams_data_holds_invariants'
+    # precedent) so punt/FG/XP/turnover-on-downs/OT branches actually get
+    # exercised, not just the model-sampling path.
+    initial = _initial_state(simulator)
+
+    simulator.form_state = {}
+    log_a = simulator.generate(300, initial, generator=torch.Generator().manual_seed(11))
+
+    simulator.form_state = {}
+    log_b = simulator.generate(300, initial, generator=torch.Generator().manual_seed(11))
+
+    assert len(log_a) == len(log_b)
+    for entry_a, entry_b in zip(log_a, log_b):
+        assert entry_a["event"] == entry_b["event"]
+        assert entry_a["state"] == entry_b["state"]
+
+
 def test_rand_is_deterministic_given_a_seeded_generator():
     from generate import _rand
     g1 = torch.Generator().manual_seed(42)

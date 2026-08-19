@@ -15,8 +15,9 @@ import pandas as pd
 import torch
 
 import team_form as tf
+from build_dataset import build_targets
 from dataset import PlayDataset
-from generate import GameSimulator, GameState
+from generate import GameSimulator, GameState, PLAYS_PER_QUARTER
 from get_batch import build_game_index
 from model import GameTransformer
 from special_teams_features import SpecialTeamsFeatureLookup
@@ -87,21 +88,72 @@ def rollout_outcome(sim, log, initial_state):
     return "team_a" if team_a_score > team_b_score else "team_b"
 
 
-def state_seed(game_id, quarter):
+def real_form_state_before(game_df, quarter):
     """
-    Stable (process-independent) integer seed for one (game, quarter) starting
-    point, used as the base seed for that state's rollouts (rollout i uses
-    base_seed + i). Uses hashlib rather than Python's built-in hash(), which
-    is randomized per-process and would break reproducibility across runs.
+    Replays every real play strictly before `quarter`'s starting point (by
+    play_id, matching build_dataset.py's own per-play iteration order --
+    this correctly includes the quarter's own opening kickoff, which
+    build_dataset.py would already have processed by the time it reaches the
+    first scrimmage play of that quarter) through team_form.update_team_form.
+    Gives each quarter's Monte Carlo rollouts the same real in-game
+    team-form context a live win-prob model would actually have at that
+    point, instead of starting from empty. Q1 legitimately starts empty --
+    no real plays precede it.
     """
-    digest = hashlib.sha256(f"{game_id}:{quarter}".encode()).hexdigest()
-    return int(digest[:8], 16)
+    scrimmage_rows = game_df[(game_df["qtr"] == quarter) & game_df["down"].notna()]
+    if scrimmage_rows.empty:
+        cutoff_play_id = game_df["play_id"].max() + 1  # no scrimmage play this quarter; replay everything available
+    else:
+        cutoff_play_id = scrimmage_rows.iloc[0]["play_id"]
+
+    form_state = tf.initial_team_form()
+    prior_rows = game_df[game_df["play_id"] < cutoff_play_id]
+    for _, row in prior_rows.iterrows():
+        targets = build_targets(row)
+        form_state = tf.update_team_form(
+            form_state, row["posteam"], row["defteam"], row["yards_gained"],
+            targets["yards_gained_applicable"], targets["touchdown"], targets["turnover"],
+            targets["td_turnover_applicable"],
+        )
+    return form_state
 
 
-def win_probability(sim, initial_state, n_rollouts, base_seed, max_plays):
+def state_seed(seed, game_id, quarter):
+    """
+    Stable (process-independent) integer seed for one (game, quarter)
+    starting point, deterministically derived from (seed, game_id, quarter)
+    per the design doc, so the whole harness run is reproducible end to end
+    from a single seed. Uses hashlib rather than Python's built-in hash(),
+    which is randomized per-process and would break reproducibility across
+    runs. Multiplies by ROLLOUTS_PER_STATE before win_probability adds the
+    rollout index on top, so two different states' rollout-seed ranges can
+    never overlap (each state gets its own disjoint block of
+    ROLLOUTS_PER_STATE consecutive integers).
+    """
+    digest = hashlib.sha256(f"{seed}:{game_id}:{quarter}".encode()).hexdigest()
+    return int(digest[:8], 16) * ROLLOUTS_PER_STATE
+
+
+def win_probability(sim, initial_state, n_rollouts, base_seed, max_plays, initial_form_state):
+    """
+    Runs n_rollouts seeded rollouts from initial_state and tallies team_a's
+    win share. Resets sim.form_state = initial_form_state at the top of
+    EVERY rollout iteration -- this is load-bearing, not cosmetic:
+    GameSimulator.generate() mutates sim.form_state as a side effect
+    (accumulating each rollout's fictitious in-game history) and never
+    resets it on its own. Without this reset, later rollouts within the
+    same call would see a team_form input contaminated by every prior
+    rollout's plays, breaking the independent-draw assumption the Monte
+    Carlo aggregation depends on -- silently, since nothing would raise or
+    fail, the resulting p_hat would just be subtly wrong. Reassigning the
+    same initial_form_state dict object to every rollout is safe because
+    team_form.update_team_form() never mutates its input in place -- it
+    always returns a new dict, so initial_form_state itself is never
+    touched by any rollout's plays.
+    """
     wins_a = 0.0
     for i in range(n_rollouts):
-        sim.form_state = tf.initial_team_form()
+        sim.form_state = initial_form_state
         generator = torch.Generator().manual_seed(base_seed + i)
         log = sim.generate(max_plays, initial_state, generator=generator)
         outcome = rollout_outcome(sim, log, initial_state)
@@ -128,6 +180,13 @@ def sample_validation_games(dataset, n_games, seed):
 
 
 def _is_correct(p_hat, y):
+    """
+    A real tie (y == 0.5) is treated as "not a win": actual_a_wins = y > 0.5
+    means a real tie only counts as correct when p_hat < 0.5 (predicting
+    team_a does NOT win). This is an arbitrary but deliberate convention,
+    distinct from and unrelated to the p_hat == 0.5 convention below (which
+    always counts as incorrect, regardless of y).
+    """
     if p_hat == 0.5:
         return False
     predicted_a_wins = p_hat > 0.5
@@ -161,7 +220,7 @@ def game_rows(pbp, game_id):
 
 
 def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
-             rollouts_per_state=ROLLOUTS_PER_STATE, max_plays=MAX_PLAYS):
+             rollouts_per_state=ROLLOUTS_PER_STATE, max_plays=MAX_PLAYS, seed=SEED):
     """
     Runs the full harness over `game_ids`. Returns (records_by_quarter,
     csv_rows, skipped): records_by_quarter maps quarter -> list of (p_hat, y)
@@ -169,6 +228,11 @@ def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
     skipped counts game-quarter points with no real scrimmage play that
     quarter (see real_state_at_quarter_start).
     """
+    assert max_plays >= 4 * PLAYS_PER_QUARTER, \
+        "max_plays must be generous enough to reach overtime, or rollout_outcome's " \
+        "unresolved-detection proxy silently misclassifies truncated regulation-time " \
+        "rollouts as decisive wins"
+
     model.eval()
 
     records_by_quarter = {q: [] for q in QUARTERS}
@@ -185,11 +249,13 @@ def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
             if initial_state is None:
                 skipped += 1
                 continue
-            base_seed = state_seed(game_id, quarter)
-            p_hat = win_probability(sim, initial_state, rollouts_per_state, base_seed, max_plays)
+            base_seed = state_seed(seed, game_id, quarter)
+            initial_form_state = real_form_state_before(game_df, quarter)
+            p_hat = win_probability(sim, initial_state, rollouts_per_state, base_seed, max_plays, initial_form_state)
             records_by_quarter[quarter].append((p_hat, y))
             csv_rows.append({"game_id": game_id, "quarter": quarter, "p_hat": p_hat, "y": y})
 
+    model.train()
     return records_by_quarter, csv_rows, skipped
 
 

@@ -5,3 +5,4 @@ data/*.parquet
 .pytest_cache/
 *.pt
 *.pkl
+pipeline/win_prob_results.csv

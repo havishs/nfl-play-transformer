@@ -336,6 +336,20 @@ class GameSimulator:
         }
 
     def generate(self, n_plays, initial_state, generator=None):
+        """
+        Runs up to n_plays plays from initial_state, stopping early once
+        regulation ends with a decided score or overtime resolves with a
+        score differential. Returns the play-by-play log (list of
+        {"event": ..., "state": ...} dicts, plus play_type/yards_gained for
+        scrimmage plays).
+
+        `generator`, if provided, must be a plain CPU torch.Generator --
+        never a CUDA generator, even when the model itself is on GPU (this
+        matters directly for this project's Colab-GPU deployment target).
+        All RNG draws inside a rollout (play-type choice, field goal/punt/
+        extra point outcomes, model sampling) run on CPU tensors internally
+        for exactly this reason -- see _sample_class's comment.
+        """
         state = initial_state
         window = []
         log = []
