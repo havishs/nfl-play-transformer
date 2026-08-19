@@ -173,24 +173,25 @@ def test_fg_make_probability_bucket_boundaries_are_correct():
 
 
 def test_attempt_field_goal_certain_make_adds_three():
-    import random
-    from dataclasses import replace
     from generate import GameState, _attempt_field_goal
-    random.seed(0)
+    # seed 0 -> draw ~0.496, well under the ~0.99 make probability at this
+    # distance/kicker (see test_fg_make_probability_* for the probability math)
+    generator = torch.Generator().manual_seed(0)
     state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=3, yardline_100=1,
                        posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
-    new_state, event = _attempt_field_goal(state, kicker_fg_pct=0.99)
+    new_state, event = _attempt_field_goal(state, kicker_fg_pct=0.99, generator=generator)
     assert event == "field_goal_made"
     assert new_state.defteam_score == 3  # scoring team is now on defense (post-kickoff)
 
 
 def test_attempt_field_goal_certain_miss_flips_possession_no_points():
-    import random
     from generate import GameState, _attempt_field_goal
-    random.seed(0)
+    # seed 1 -> draw ~0.758, above the 0.37 make probability at this
+    # distance/kicker (see test_fg_make_probability_* for the probability math)
+    generator = torch.Generator().manual_seed(1)
     state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=3, yardline_100=65,
                        posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
-    new_state, event = _attempt_field_goal(state, kicker_fg_pct=None)
+    new_state, event = _attempt_field_goal(state, kicker_fg_pct=None, generator=generator)
     assert event == "field_goal_missed"
     assert new_state.posteam_score == 0 and new_state.defteam_score == 0
     assert new_state.posteam == "SF"  # possession flipped

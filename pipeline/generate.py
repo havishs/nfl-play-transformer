@@ -182,11 +182,11 @@ def _fg_make_probability(kick_distance, kicker_fg_pct):
     return min(0.99, max(0.02, baseline + adjustment))
 
 
-def _attempt_field_goal(state, kicker_fg_pct):
+def _attempt_field_goal(state, kicker_fg_pct, generator):
     """kicker_fg_pct: causal career FG% for the kicking team's kicker, or None if unknown (falls back to the distance baseline)."""
     kick_distance = state.yardline_100 + KICK_DISTANCE_OFFSET
     p_make = _fg_make_probability(kick_distance, kicker_fg_pct)
-    made = random.random() < p_make
+    made = _rand(generator) < p_make
     if made:
         scored = replace(state, posteam_score=state.posteam_score + 3)
         return _kickoff_after_score(scored), "field_goal_made"
@@ -352,7 +352,7 @@ class GameSimulator:
                     log.append({"event": "punt", "state": state})
                     continue
                 if decision == "fg":
-                    state, fg_event = _attempt_field_goal(state, self._fg_pct_for(state.posteam))
+                    state, fg_event = _attempt_field_goal(state, self._fg_pct_for(state.posteam), generator)
                     state = _normalize_quarter(state)
                     log.append({"event": fg_event, "state": state})
                     continue
