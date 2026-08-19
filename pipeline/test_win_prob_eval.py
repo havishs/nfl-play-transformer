@@ -96,3 +96,77 @@ def test_real_outcome_team_a_is_away_and_loses():
 def test_real_outcome_tie_returns_half():
     game_df = pd.DataFrame([_game_row(home_score=17.0, away_score=17.0)])
     assert real_outcome(game_df, team_a="KC") == 0.5
+
+
+from types import SimpleNamespace
+
+import torch
+
+from win_prob_eval import rollout_outcome, win_probability, state_seed
+from generate import GameState
+
+
+def _final_state(**overrides):
+    base = dict(quarter=4, play_in_quarter=10, down=1, ydstogo=10, yardline_100=50,
+                posteam="KC", defteam="SF", posteam_score=17, defteam_score=10)
+    base.update(overrides)
+    return GameState(**base)
+
+
+def test_rollout_outcome_team_a_wins_when_team_a_has_the_ball_and_leads():
+    sim = SimpleNamespace(team_a="KC", team_b="SF")
+    log = [{"event": "gain", "state": _final_state(posteam="KC", defteam="SF", posteam_score=17, defteam_score=10)}]
+    assert rollout_outcome(sim, log, log[0]["state"]) == "team_a"
+
+
+def test_rollout_outcome_team_b_wins_when_team_a_is_on_defense_and_trails():
+    sim = SimpleNamespace(team_a="KC", team_b="SF")
+    # team_a (KC) is on defense here; defteam_score (KC's score) is lower than posteam_score (SF's)
+    log = [{"event": "gain", "state": _final_state(posteam="SF", defteam="KC", posteam_score=24, defteam_score=10)}]
+    assert rollout_outcome(sim, log, log[0]["state"]) == "team_b"
+
+
+def test_rollout_outcome_unresolved_when_still_tied_in_overtime():
+    sim = SimpleNamespace(team_a="KC", team_b="SF")
+    log = [{"event": "gain", "state": _final_state(quarter=6, posteam_score=20, defteam_score=20)}]
+    assert rollout_outcome(sim, log, log[0]["state"]) == "unresolved"
+
+
+def test_rollout_outcome_falls_back_to_initial_state_when_log_is_empty():
+    sim = SimpleNamespace(team_a="KC", team_b="SF")
+    initial = _final_state(posteam="KC", defteam="SF", posteam_score=3, defteam_score=0)
+    assert rollout_outcome(sim, [], initial) == "team_a"
+
+
+def test_win_probability_tallies_wins_and_unresolved_as_half_credit(monkeypatch):
+    # fake sim whose .generate() cycles through team_a win, team_b win, unresolved
+    outcomes = [
+        _final_state(posteam="KC", defteam="SF", posteam_score=10, defteam_score=0),   # team_a win
+        _final_state(posteam="SF", defteam="KC", posteam_score=10, defteam_score=0),   # team_b win
+        _final_state(quarter=6, posteam_score=10, defteam_score=10),                    # unresolved
+    ]
+    calls = {"i": 0}
+
+    class FakeSim:
+        team_a = "KC"
+        team_b = "SF"
+
+        def generate(self, n_plays, initial_state, generator=None):
+            state = outcomes[calls["i"] % len(outcomes)]
+            calls["i"] += 1
+            return [{"event": "gain", "state": state}]
+
+    initial = _final_state()
+    p_hat = win_probability(FakeSim(), initial, n_rollouts=3, base_seed=0, max_plays=10)
+    # 1 team_a win (1.0) + 1 team_b win (0.0) + 1 unresolved (0.5) = 1.5 / 3
+    assert p_hat == pytest.approx(0.5)
+
+
+def test_state_seed_is_deterministic_and_varies_by_game_and_quarter():
+    a = state_seed("2023_01_KC_SF", 1)
+    b = state_seed("2023_01_KC_SF", 1)
+    c = state_seed("2023_01_KC_SF", 2)
+    d = state_seed("2023_02_KC_SF", 1)
+    assert a == b
+    assert a != c
+    assert a != d
