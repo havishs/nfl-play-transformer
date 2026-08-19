@@ -170,3 +170,36 @@ def test_state_seed_is_deterministic_and_varies_by_game_and_quarter():
     assert a == b
     assert a != c
     assert a != d
+
+
+from win_prob_eval import sample_validation_games
+
+
+@pytest.fixture(scope="module")
+def small_dataset_for_sampling():
+    from dataset import PlayDataset
+    return PlayDataset(history_seasons=[2022], training_seasons=[2023], data_dir="../data", max_examples=1500)
+
+
+def test_sample_validation_games_is_deterministic(small_dataset_for_sampling):
+    first = sample_validation_games(small_dataset_for_sampling, n_games=3, seed=42)
+    second = sample_validation_games(small_dataset_for_sampling, n_games=3, seed=42)
+    assert first == second
+
+
+def test_sample_validation_games_stays_within_the_held_out_split(small_dataset_for_sampling):
+    from get_batch import build_game_index
+    from train import VAL_FRACTION
+
+    game_ids = sorted(build_game_index(small_dataset_for_sampling.examples).keys())
+    n_val = max(1, round(len(game_ids) * VAL_FRACTION))
+    val_game_ids = set(game_ids[-n_val:])
+
+    sampled = sample_validation_games(small_dataset_for_sampling, n_games=3, seed=42)
+    assert set(sampled) <= val_game_ids
+
+
+def test_sample_validation_games_caps_at_available_val_games(small_dataset_for_sampling):
+    sampled = sample_validation_games(small_dataset_for_sampling, n_games=10_000, seed=1)
+    from get_batch import build_game_index
+    assert len(sampled) <= len(build_game_index(small_dataset_for_sampling.examples))

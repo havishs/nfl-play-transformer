@@ -9,6 +9,7 @@ the full design and the compute-budget reasoning behind the constants below.
 """
 
 import hashlib
+import random
 
 import torch
 
@@ -91,3 +92,21 @@ def win_probability(sim, initial_state, n_rollouts, base_seed, max_plays):
         elif outcome == "unresolved":
             wins_a += 0.5
     return wins_a / n_rollouts
+
+
+def sample_validation_games(dataset, n_games, seed):
+    """
+    Deterministic subsample of the held-out validation split (same split
+    eval.py uses: the last VAL_FRACTION of games, chronologically). See the
+    design doc for why this harness subsamples rather than evaluating the
+    full validation set (full-set compute is not tractable given generate()
+    isn't batched across rollouts).
+    """
+    from get_batch import build_game_index
+    from train import VAL_FRACTION
+
+    game_ids = sorted(build_game_index(dataset.examples).keys())
+    n_val = max(1, round(len(game_ids) * VAL_FRACTION))
+    val_game_ids = game_ids[-n_val:]
+    rng = random.Random(seed)
+    return sorted(rng.sample(val_game_ids, min(n_games, len(val_game_ids))))
