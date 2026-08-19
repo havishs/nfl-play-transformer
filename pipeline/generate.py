@@ -37,8 +37,11 @@ from torch.nn import functional as F
 import situational as sit
 import team_form as tf
 
-PUNT_NET_YARDS = 40
-TOUCHBACK_YARDLINE_100 = 75  # own 25, standard touchback spot (kickoff only -- punt touchback is different, see _punt)
+TOUCHBACK_YARDLINE_100 = 75  # own 25, kickoff touchback spot
+PUNT_TOUCHBACK_YARDLINE_100 = 80  # own 20, punt touchback spot (real NFL rule -- distinct from kickoff's)
+PUNT_TOUCHBACK_RATE = 0.067  # real 2018-2023 rate
+PUNT_AVG_RETURN_YARDS = 3.6  # real 2018-2023 mean return yardage when not a touchback
+LEAGUE_AVG_PUNT_DISTANCE = 45.9  # real 2018-2023 mean gross kick_distance -- fallback for an unknown punter
 PLAYS_PER_QUARTER = 43  # ~174 measured plays/game (PROJECT_BRIEF.md) / 4 quarters
 PASS_RUN_WEIGHTS = {"pass": 0.57, "run": 0.43}  # rough league split, only used as model INPUT context
 
@@ -115,10 +118,17 @@ def _sample_class(logits, generator):
     return torch.multinomial(probs, num_samples=1, generator=generator).item()
 
 
-def _punt(state):
-    """4th-down heuristic: always punt, fixed net yardage, touchback-clipped."""
-    kicking_yardline_100 = max(1, state.yardline_100 - PUNT_NET_YARDS)
-    receiving_yardline_100 = min(TOUCHBACK_YARDLINE_100, 100 - kicking_yardline_100)
+def _punt(state, punter_avg_distance):
+    """punter_avg_distance: causal career average gross kick_distance for the punting team's punter, or None if unknown (falls back to the league average)."""
+    if random.random() < PUNT_TOUCHBACK_RATE:
+        return state.flip_possession(
+            down=1, ydstogo=10, yardline_100=PUNT_TOUCHBACK_YARDLINE_100,
+            play_in_quarter=state.play_in_quarter + 1,
+        )
+    gross_distance = punter_avg_distance if punter_avg_distance is not None else LEAGUE_AVG_PUNT_DISTANCE
+    net_distance = gross_distance - PUNT_AVG_RETURN_YARDS
+    kicking_yardline_100 = max(1, state.yardline_100 - net_distance)
+    receiving_yardline_100 = min(PUNT_TOUCHBACK_YARDLINE_100, 100 - kicking_yardline_100)
     return state.flip_possession(
         down=1, ydstogo=10, yardline_100=receiving_yardline_100,
         play_in_quarter=state.play_in_quarter + 1,
@@ -244,9 +254,15 @@ class GameSimulator:
         # these are used, so this is a real, testable, not just a stub state.
         self.team_a_fg_pct = None
         self.team_b_fg_pct = None
+        # Same None-default, same real fallback-to-league-average reasoning as fg_pct above.
+        self.team_a_punt_avg = None
+        self.team_b_punt_avg = None
 
     def _fg_pct_for(self, posteam):
         return self.team_a_fg_pct if posteam == self.team_a else self.team_b_fg_pct
+
+    def _punt_avg_for(self, posteam):
+        return self.team_a_punt_avg if posteam == self.team_a else self.team_b_punt_avg
 
     def _personnel_for(self, posteam):
         # Personnel is a fixed snapshot (no substitution/in-game-form modeling, per
@@ -291,7 +307,7 @@ class GameSimulator:
             if state.down > 3:
                 decision = _fourth_down_decision(state)
                 if decision == "punt":
-                    state = _normalize_quarter(_punt(state))
+                    state = _normalize_quarter(_punt(state, self._punt_avg_for(state.posteam)))
                     log.append({"event": "punt", "state": state})
                     continue
                 if decision == "fg":

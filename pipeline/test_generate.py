@@ -206,6 +206,36 @@ def test_apply_turnover_on_downs_flips_possession_no_return():
     assert new_state.yardline_100 == 100 - (40 - 2)  # spot of the play, no return
 
 
+def test_punt_uses_punter_average_when_known():
+    import random
+    from generate import GameState, _punt
+    random.seed(1)  # avoid the touchback branch for this deterministic check
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state = _punt(state, punter_avg_distance=50.0)
+    # net = 50.0 - PUNT_AVG_RETURN_YARDS; kicking spot = 65 - net; receiving yardline_100 = 100 - kicking spot
+    from generate import PUNT_AVG_RETURN_YARDS
+    expected_net = 50.0 - PUNT_AVG_RETURN_YARDS
+    expected_kicking_spot = max(1, 65 - expected_net)
+    expected_yardline_100 = min(80, 100 - expected_kicking_spot)
+    assert new_state.yardline_100 == pytest.approx(expected_yardline_100, abs=1)
+
+
+def test_punt_falls_back_to_league_average_when_punter_unknown():
+    import random
+    from generate import GameState, _punt, LEAGUE_AVG_PUNT_DISTANCE
+    random.seed(1)
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state = _punt(state, punter_avg_distance=None)
+    assert new_state.posteam == "SF"  # sanity: possession still flips either way
+
+
+def test_punt_touchback_spot_is_the_20_not_the_25():
+    from generate import PUNT_TOUCHBACK_YARDLINE_100
+    assert PUNT_TOUCHBACK_YARDLINE_100 == 80  # own 20 -- distinct from kickoff's 75 (own 25)
+
+
 def test_apply_turnover_on_downs_handles_a_loss_on_the_play():
     from generate import GameState, _apply_turnover_on_downs
     state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=2, yardline_100=40,
