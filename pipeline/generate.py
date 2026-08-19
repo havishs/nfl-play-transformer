@@ -36,6 +36,7 @@ from torch.nn import functional as F
 
 import situational as sit
 import team_form as tf
+from special_teams_features import SpecialTeamsFeatureLookup
 
 TOUCHBACK_YARDLINE_100 = 75  # own 25, kickoff touchback spot
 PUNT_TOUCHBACK_YARDLINE_100 = 80  # own 20, punt touchback spot (real NFL rule -- distinct from kickoff's)
@@ -243,7 +244,7 @@ def _apply_scrimmage_gain(state, yards_gained):
 
 
 class GameSimulator:
-    def __init__(self, model, dataset, seed_game_id, device="cpu"):
+    def __init__(self, model, dataset, seed_game_id, device="cpu", special_teams=None):
         self.model = model
         self.dataset = dataset
         self.device = device
@@ -258,14 +259,23 @@ class GameSimulator:
         self.team_b = seed["situational"]["defteam"]
         self.team_b_personnel = (seed["defense"], seed["offense"])
         self.form_state = tf.initial_team_form()
-        # None until wired to a real SpecialTeamsFeatureLookup (a later task) --
-        # None correctly falls back to the league-average baseline everywhere
-        # these are used, so this is a real, testable, not just a stub state.
-        self.team_a_fg_pct = None
-        self.team_b_fg_pct = None
-        # Same None-default, same real fallback-to-league-average reasoning as fg_pct above.
-        self.team_a_punt_avg = None
-        self.team_b_punt_avg = None
+
+        # special_teams=None (e.g. in small/fast unit tests) leaves every stat
+        # at None, which already falls back correctly to the league-average
+        # baseline everywhere it's used (see _fg_make_probability/_punt).
+        self.team_a_fg_pct = self.team_b_fg_pct = None
+        self.team_a_punt_avg = self.team_b_punt_avg = None
+        if special_teams is not None:
+            for team_attr, fg_attr, punt_attr in [
+                (self.team_a, "team_a_fg_pct", "team_a_punt_avg"),
+                (self.team_b, "team_b_fg_pct", "team_b_punt_avg"),
+            ]:
+                kicker_id = special_teams.primary_kicker(team_attr, self.season)
+                if kicker_id is not None:
+                    setattr(self, fg_attr, special_teams.fg_pct(kicker_id, self.season, self.week))
+                punter_id = special_teams.primary_punter(team_attr, self.season)
+                if punter_id is not None:
+                    setattr(self, punt_attr, special_teams.punt_avg_distance(punter_id, self.season, self.week))
 
     def _fg_pct_for(self, posteam):
         return self.team_a_fg_pct if posteam == self.team_a else self.team_b_fg_pct

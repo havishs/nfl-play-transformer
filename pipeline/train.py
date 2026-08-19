@@ -20,6 +20,7 @@ from dataset import PlayDataset
 from generate import GameSimulator, GameState
 from get_batch import GameBatcher, build_game_index
 from model import OUTPUT_HEADS, GameTransformer
+from special_teams_features import SpecialTeamsFeatureLookup
 
 # ---- hyperparameters ----
 # 2016-2017 excluded: nfl_data_py's weekly PFR defensive stats (weekly_def)
@@ -245,7 +246,8 @@ def main():
 
     print("\n--- sample rollout from the best checkpoint (step 4: does generate() look plausible?) ---")
     model.eval()
-    sim = GameSimulator(model, dataset, seed_game_id=val_game_ids[0], device=DEVICE)
+    special_teams = SpecialTeamsFeatureLookup(TRAINING_SEASONS, DATA_DIR)
+    sim = GameSimulator(model, dataset, seed_game_id=val_game_ids[0], device=DEVICE, special_teams=special_teams)
     initial = GameState(
         quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
         posteam=sim.team_a, defteam=sim.team_b, posteam_score=0, defteam_score=0,

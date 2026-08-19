@@ -480,3 +480,79 @@ def test_team_form_credits_preplay_team_on_turnover(simulator, monkeypatch):
             prev_state = entry["state"]
 
     pytest.fail("expected at least one turnover across sampled rollouts")
+
+
+def test_simulator_resolves_real_kicker_and_punter_data(small_dataset):
+    from special_teams_features import SpecialTeamsFeatureLookup
+    from generate import GameSimulator
+    from model import GameTransformer
+
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+    seed_game_id = small_dataset.examples[0]["game_id"]
+    special_teams = SpecialTeamsFeatureLookup([2022, 2023], data_dir="../data")
+    sim = GameSimulator(model, small_dataset, seed_game_id, device="cpu", special_teams=special_teams)
+
+    # both teams played real games in this season, so at least one side should
+    # have resolved to a real (non-None) causal value for at least one of the two stats
+    resolved = [sim.team_a_fg_pct, sim.team_b_fg_pct, sim.team_a_punt_avg, sim.team_b_punt_avg]
+    assert any(v is not None for v in resolved), "expected at least one real kicker/punter stat to resolve"
+
+
+def test_simulator_resolves_each_teams_own_kicker_and_punter_not_swapped(small_dataset):
+    # test_simulator_resolves_real_kicker_and_punter_data above only checks that
+    # SOME value resolved -- it would still pass if team_a's and team_b's stats
+    # were cross-assigned, or if primary_kicker/fg_pct were called with the wrong
+    # team/season/week. This test recomputes each team's expected value directly
+    # from the same lookup and checks it lands on the matching attribute, so a
+    # swap or argument-order bug fails this test even though a real value still
+    # resolves somewhere.
+    from special_teams_features import SpecialTeamsFeatureLookup
+    from generate import GameSimulator
+    from model import GameTransformer
+
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+    seed_game_id = small_dataset.examples[0]["game_id"]
+    special_teams = SpecialTeamsFeatureLookup([2022, 2023], data_dir="../data")
+    sim = GameSimulator(model, small_dataset, seed_game_id, device="cpu", special_teams=special_teams)
+
+    found_real_value = False
+    for team, fg_attr, punt_attr in [
+        (sim.team_a, "team_a_fg_pct", "team_a_punt_avg"),
+        (sim.team_b, "team_b_fg_pct", "team_b_punt_avg"),
+    ]:
+        kicker_id = special_teams.primary_kicker(team, sim.season)
+        expected_fg = None if kicker_id is None else special_teams.fg_pct(kicker_id, sim.season, sim.week)
+        assert getattr(sim, fg_attr) == expected_fg
+
+        punter_id = special_teams.primary_punter(team, sim.season)
+        expected_punt = None if punter_id is None else special_teams.punt_avg_distance(punter_id, sim.season, sim.week)
+        assert getattr(sim, punt_attr) == expected_punt
+
+        found_real_value = found_real_value or expected_fg is not None or expected_punt is not None
+
+    assert found_real_value, "expected at least one real kicker/punter stat to resolve"
+
+
+def test_simulator_without_special_teams_lookup_leaves_stats_none(small_dataset):
+    # Guards the special_teams=None default path itself: without this, a bug
+    # that leaves stats unset only when special_teams IS passed (e.g. an
+    # exception swallowed somewhere, or the attributes never initialized
+    # outside the `if special_teams is not None` branch) wouldn't be caught by
+    # the two tests above, since neither exercises the None default.
+    from generate import GameSimulator
+    from model import GameTransformer
+
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+    seed_game_id = small_dataset.examples[0]["game_id"]
+    sim = GameSimulator(model, small_dataset, seed_game_id, device="cpu")
+
+    assert sim.team_a_fg_pct is None
+    assert sim.team_b_fg_pct is None
+    assert sim.team_a_punt_avg is None
+    assert sim.team_b_punt_avg is None
