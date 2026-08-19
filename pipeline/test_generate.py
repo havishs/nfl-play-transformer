@@ -55,13 +55,88 @@ def test_generate_stops_after_four_quarters(simulator):
     assert len(log) < 2000
 
 
-def test_fourth_down_always_punts(simulator):
+def test_fourth_down_punts_when_out_of_range_and_not_short(simulator):
+    # _initial_state's yardline_100=75/ydstogo=10 is out of FG range and not
+    # short-yardage -- one specific case of the 4th-down decision, not a
+    # universal "always punts" rule (see test_fourth_down_decision_* below
+    # for the other branches of that decision).
     generator = torch.Generator().manual_seed(3)
     state = replace(_initial_state(simulator), down=4)
     log = simulator.generate(1, state, generator=generator)
     assert log[0]["event"] == "punt"
     assert log[0]["state"].down == 1
     assert log[0]["state"].posteam == simulator.team_b  # possession flipped
+
+
+def test_fourth_down_decision_kicks_fg_in_range():
+    from generate import GameState, _fourth_down_decision
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=25,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    assert _fourth_down_decision(state) == "fg"
+
+
+def test_fourth_down_decision_punts_out_of_range_and_long():
+    from generate import GameState, _fourth_down_decision
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    assert _fourth_down_decision(state) == "punt"
+
+
+def test_fourth_down_decision_goes_for_it_short_yardage_out_of_range():
+    from generate import GameState, _fourth_down_decision
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=1, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    assert _fourth_down_decision(state) == "go"
+
+
+def test_fourth_down_decision_goes_for_it_when_desperate_regardless_of_distance():
+    from generate import GameState, _fourth_down_decision
+    state = GameState(quarter=4, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=10)
+    assert _fourth_down_decision(state) == "go"
+
+
+def test_fg_make_probability_short_kick_is_high(monkeypatch):
+    from generate import _fg_make_probability
+    p = _fg_make_probability(kick_distance=25, kicker_fg_pct=None)
+    assert p > 0.9
+
+
+def test_fg_make_probability_long_kick_is_low():
+    from generate import _fg_make_probability
+    p = _fg_make_probability(kick_distance=68, kicker_fg_pct=None)
+    assert p < 0.5
+
+
+def test_fg_make_probability_good_kicker_beats_average(monkeypatch):
+    from generate import _fg_make_probability
+    p_avg = _fg_make_probability(kick_distance=45, kicker_fg_pct=None)
+    p_good = _fg_make_probability(kick_distance=45, kicker_fg_pct=0.95)
+    assert p_good > p_avg
+
+
+def test_attempt_field_goal_certain_make_adds_three():
+    import random
+    from dataclasses import replace
+    from generate import GameState, _attempt_field_goal
+    random.seed(0)
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=3, yardline_100=1,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state, event = _attempt_field_goal(state, kicker_fg_pct=0.99)
+    assert event == "field_goal_made"
+    assert new_state.defteam_score == 3  # scoring team is now on defense (post-kickoff)
+
+
+def test_attempt_field_goal_certain_miss_flips_possession_no_points():
+    import random
+    from generate import GameState, _attempt_field_goal
+    random.seed(0)
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=3, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state, event = _attempt_field_goal(state, kicker_fg_pct=None)
+    assert event == "field_goal_missed"
+    assert new_state.posteam_score == 0 and new_state.defteam_score == 0
+    assert new_state.posteam == "SF"  # possession flipped
 
 
 def test_team_form_updates_across_rollout(simulator):

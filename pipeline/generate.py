@@ -38,9 +38,19 @@ import situational as sit
 import team_form as tf
 
 PUNT_NET_YARDS = 40
-TOUCHBACK_YARDLINE_100 = 75  # own 25, standard touchback spot
+TOUCHBACK_YARDLINE_100 = 75  # own 25, standard touchback spot (kickoff only -- punt touchback is different, see _punt)
 PLAYS_PER_QUARTER = 43  # ~174 measured plays/game (PROJECT_BRIEF.md) / 4 quarters
 PASS_RUN_WEIGHTS = {"pass": 0.57, "run": 0.43}  # rough league split, only used as model INPUT context
+
+# 4th-down decision + field goal constants -- all derived from real 2018-2023
+# pbp data, see docs/superpowers/specs/2026-08-19-special-teams-modeling-design.md
+FG_RANGE_YARDLINE_100 = 40  # ~58-yard attempt; real attempts: p95=37, p99=41, max=52
+GO_FOR_IT_SHORT_YDSTOGO = 2  # short-yardage conversions generally worth attempting
+DESPERATION_SCORE_DEFICIT = 9  # down more than one converted score late in Q4 -- always go for it
+KICK_DISTANCE_OFFSET = 18  # kick_distance = yardline_100 + 18 (real median/mode offset, exact)
+FG_DISTANCE_EDGES = [19, 29, 39, 49, 59]  # upper bound of each bucket except the last (60+)
+FG_DISTANCE_BASELINE = [0.98, 0.98, 0.93, 0.78, 0.67, 0.37]  # real make rate by bucket, 2018-2023
+LEAGUE_AVG_FG_PCT = 0.846  # overall real make rate, 2018-2023 -- kicker-adjustment baseline
 
 YARDS_GAINED_BUCKET_MIDPOINT = {
     "loss": -3, "no_gain": 0, "short_1-3": 2, "medium_4-6": 5,
@@ -115,6 +125,47 @@ def _punt(state):
     )
 
 
+def _fourth_down_decision(state):
+    """Returns "fg", "punt", or "go" -- see the design doc for the reasoning behind each threshold."""
+    desperate = state.quarter == 4 and (state.posteam_score - state.defteam_score) <= -DESPERATION_SCORE_DEFICIT
+    if desperate:
+        return "go"
+    if state.yardline_100 <= FG_RANGE_YARDLINE_100:
+        return "fg"
+    if state.ydstogo <= GO_FOR_IT_SHORT_YDSTOGO:
+        return "go"
+    return "punt"
+
+
+def _fg_make_probability(kick_distance, kicker_fg_pct):
+    idx = 0
+    for edge in FG_DISTANCE_EDGES:
+        if kick_distance > edge:
+            idx += 1
+        else:
+            break
+    baseline = FG_DISTANCE_BASELINE[idx]
+    adjustment = (kicker_fg_pct - LEAGUE_AVG_FG_PCT) if kicker_fg_pct is not None else 0.0
+    return min(0.99, max(0.02, baseline + adjustment))
+
+
+def _attempt_field_goal(state, kicker_fg_pct):
+    """kicker_fg_pct: causal career FG% for the kicking team's kicker, or None if unknown (falls back to the distance baseline)."""
+    kick_distance = state.yardline_100 + KICK_DISTANCE_OFFSET
+    p_make = _fg_make_probability(kick_distance, kicker_fg_pct)
+    made = random.random() < p_make
+    if made:
+        scored = replace(state, posteam_score=state.posteam_score + 3)
+        return _kickoff_after_score(scored), "field_goal_made"
+    # missed: opponent takes over at the previous line of scrimmage (mirrors
+    # _apply_turnover's math with yards_gained=0, return_yards=0)
+    new_state = state.flip_possession(
+        down=1, ydstogo=10, yardline_100=100 - state.yardline_100,
+        play_in_quarter=state.play_in_quarter + 1,
+    )
+    return new_state, "field_goal_missed"
+
+
 def _kickoff_after_score(state):
     """Scoring-team-kicks-off heuristic: always a touchback."""
     return state.flip_possession(
@@ -178,6 +229,14 @@ class GameSimulator:
         self.team_b = seed["situational"]["defteam"]
         self.team_b_personnel = (seed["defense"], seed["offense"])
         self.form_state = tf.initial_team_form()
+        # None until wired to a real SpecialTeamsFeatureLookup (a later task) --
+        # None correctly falls back to the league-average baseline everywhere
+        # these are used, so this is a real, testable, not just a stub state.
+        self.team_a_fg_pct = None
+        self.team_b_fg_pct = None
+
+    def _fg_pct_for(self, posteam):
+        return self.team_a_fg_pct if posteam == self.team_a else self.team_b_fg_pct
 
     def _personnel_for(self, posteam):
         # Personnel is a fixed snapshot (no substitution/in-game-form modeling, per
@@ -220,11 +279,22 @@ class GameSimulator:
                 break
 
             if state.down > 3:
-                state = _normalize_quarter(_punt(state))
-                if state.quarter > 4:
-                    break
-                log.append({"event": "punt", "state": state})
-                continue
+                decision = _fourth_down_decision(state)
+                if decision == "punt":
+                    state = _normalize_quarter(_punt(state))
+                    if state.quarter > 4:
+                        break
+                    log.append({"event": "punt", "state": state})
+                    continue
+                if decision == "fg":
+                    state, fg_event = _attempt_field_goal(state, self._fg_pct_for(state.posteam))
+                    state = _normalize_quarter(state)
+                    if state.quarter > 4:
+                        break
+                    log.append({"event": fg_event, "state": state})
+                    continue
+                # decision == "go": fall through to the normal model-driven
+                # scrimmage-play flow below, same as any other down.
 
             play_type = random.choices(
                 list(PASS_RUN_WEIGHTS), weights=list(PASS_RUN_WEIGHTS.values())
