@@ -232,3 +232,49 @@ def test_summarize_handles_an_empty_quarter():
     assert summary[1]["n"] == 0
     assert summary[1]["accuracy"] != summary[1]["accuracy"]  # NaN
     assert summary["overall"]["n"] == 1
+
+
+from win_prob_eval import evaluate, load_pbp_for_seasons, game_rows
+
+
+@pytest.fixture(scope="module")
+def small_dataset_for_evaluate():
+    from dataset import PlayDataset
+    return PlayDataset(history_seasons=[2022], training_seasons=[2023], data_dir="../data", max_examples=1500)
+
+
+def test_evaluate_end_to_end_smoke(small_dataset_for_evaluate):
+    from model import GameTransformer
+
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset_for_evaluate.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+
+    game_id = small_dataset_for_evaluate.examples[0]["game_id"]
+    season = int(game_id.split("_")[0])
+    pbp = load_pbp_for_seasons([season], data_dir="../data")
+
+    records_by_quarter, csv_rows, skipped = evaluate(
+        model, small_dataset_for_evaluate, pbp, [game_id], device="cpu",
+        rollouts_per_state=3, max_plays=15,
+    )
+
+    total_points = sum(len(v) for v in records_by_quarter.values())
+    assert total_points + skipped == 4  # one point per quarter, for the one game evaluated
+    assert len(csv_rows) == total_points
+    for records in records_by_quarter.values():
+        for p_hat, y in records:
+            assert 0.0 <= p_hat <= 1.0
+            assert y in (0.0, 0.5, 1.0)
+    for row in csv_rows:
+        assert set(row.keys()) == {"game_id", "quarter", "p_hat", "y"}
+
+
+def test_game_rows_sorts_by_play_id():
+    pbp = pd.DataFrame([
+        {"game_id": "g1", "play_id": 3.0, "qtr": 1.0},
+        {"game_id": "g1", "play_id": 1.0, "qtr": 1.0},
+        {"game_id": "g2", "play_id": 2.0, "qtr": 1.0},
+    ])
+    result = game_rows(pbp, "g1")
+    assert list(result["play_id"]) == [1.0, 3.0]

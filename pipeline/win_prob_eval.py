@@ -11,6 +11,7 @@ the full design and the compute-budget reasoning behind the constants below.
 import hashlib
 import random
 
+import pandas as pd
 import torch
 
 from generate import GameState
@@ -134,3 +135,45 @@ def summarize(records_by_quarter):
     all_records = [r for records in records_by_quarter.values() for r in records]
     summary["overall"] = _metrics(all_records)
     return summary
+
+
+def load_pbp_for_seasons(seasons, data_dir):
+    frames = [pd.read_parquet(f"{data_dir}/pbp_{s}.parquet") for s in seasons]
+    return pd.concat(frames, ignore_index=True)
+
+
+def game_rows(pbp, game_id):
+    return pbp[pbp["game_id"] == game_id].sort_values("play_id")
+
+
+def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
+             rollouts_per_state=ROLLOUTS_PER_STATE, max_plays=MAX_PLAYS):
+    """
+    Runs the full harness over `game_ids`. Returns (records_by_quarter,
+    csv_rows, skipped): records_by_quarter maps quarter -> list of (p_hat, y)
+    for summarize(); csv_rows is the flat per-state log for the CSV dump;
+    skipped counts game-quarter points with no real scrimmage play that
+    quarter (see real_state_at_quarter_start).
+    """
+    from generate import GameSimulator
+
+    records_by_quarter = {q: [] for q in QUARTERS}
+    csv_rows = []
+    skipped = 0
+
+    for game_id in game_ids:
+        game_df = game_rows(pbp, game_id)
+        sim = GameSimulator(model, dataset, game_id, device=device, special_teams=special_teams)
+        y = real_outcome(game_df, sim.team_a)
+
+        for quarter in QUARTERS:
+            initial_state = real_state_at_quarter_start(game_df, quarter)
+            if initial_state is None:
+                skipped += 1
+                continue
+            base_seed = state_seed(game_id, quarter)
+            p_hat = win_probability(sim, initial_state, rollouts_per_state, base_seed, max_plays)
+            records_by_quarter[quarter].append((p_hat, y))
+            csv_rows.append({"game_id": game_id, "quarter": quarter, "p_hat": p_hat, "y": y})
+
+    return records_by_quarter, csv_rows, skipped
