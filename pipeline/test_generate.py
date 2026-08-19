@@ -48,11 +48,30 @@ def test_generate_runs_without_crashing_and_holds_invariants(simulator):
 
 def test_generate_stops_after_four_quarters(simulator):
     generator = torch.Generator().manual_seed(2)
-    # far more plays than a real game has -- generate() must stop itself via
-    # the quarter > 4 check rather than running forever.
+    # far more plays than a real game has -- generate() must stop itself
+    # rather than running forever. quarter > 4 is now a valid outcome (a
+    # tied game legitimately continues into overtime, see
+    # test_overtime_continues_when_tied_and_stops_on_first_score) so the
+    # real invariant to check here is termination, not a quarter ceiling.
     log = simulator.generate(2000, _initial_state(simulator), generator=generator)
-    assert all(entry["state"].quarter <= 4 for entry in log)
     assert len(log) < 2000
+
+
+def test_overtime_continues_when_tied_and_stops_on_first_score(simulator):
+    from dataclasses import replace
+    tied_state = replace(_initial_state(simulator), quarter=5, play_in_quarter=0,
+                          posteam_score=14, defteam_score=14)
+    generator = torch.Generator().manual_seed(5)
+    log = simulator.generate(60, tied_state, generator=generator)
+    assert len(log) > 0
+    # game must end the instant a score happens in overtime -- no more log
+    # entries after the first touchdown/field_goal event
+    for i, entry in enumerate(log):
+        if entry["event"] in ("touchdown", "field_goal_made"):
+            assert i == len(log) - 1
+            return
+    # if no score occurred in this sample, that's fine too -- the important
+    # invariant (stop-on-score) just wasn't exercised this run
 
 
 def test_fourth_down_punts_when_out_of_range_and_not_short(simulator):

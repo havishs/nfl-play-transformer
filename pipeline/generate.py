@@ -285,22 +285,18 @@ class GameSimulator:
         log = []
 
         for _ in range(n_plays):
-            if state.quarter > 4:
+            if state.quarter > 4 and state.posteam_score != state.defteam_score:
                 break
 
             if state.down > 3:
                 decision = _fourth_down_decision(state)
                 if decision == "punt":
                     state = _normalize_quarter(_punt(state))
-                    if state.quarter > 4:
-                        break
                     log.append({"event": "punt", "state": state})
                     continue
                 if decision == "fg":
                     state, fg_event = _attempt_field_goal(state, self._fg_pct_for(state.posteam))
                     state = _normalize_quarter(state)
-                    if state.quarter > 4:
-                        break
                     log.append({"event": fg_event, "state": state})
                     continue
                 # decision == "go": fall through to the normal model-driven
@@ -357,8 +353,6 @@ class GameSimulator:
                 event = "gain"
 
             state = _normalize_quarter(state)
-            if state.quarter > 4:
-                break
             log.append({"event": event, "play_type": play_type, "yards_gained": yards_gained, "state": state})
 
         return log
