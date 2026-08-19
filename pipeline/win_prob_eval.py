@@ -36,3 +36,15 @@ def real_state_at_quarter_start(game_df, quarter):
         posteam=row["posteam"], defteam=row["defteam"],
         posteam_score=int(row["posteam_score"]), defteam_score=int(row["defteam_score"]),
     )
+
+
+def real_outcome(game_df, team_a):
+    """1.0 if team_a actually won this real game, 0.0 if it lost, 0.5 on a real tie."""
+    row = game_df.iloc[0]
+    team_a_score = row["home_score"] if team_a == row["home_team"] else row["away_score"]
+    team_b_score = row["away_score"] if team_a == row["home_team"] else row["home_score"]
+    if team_a_score > team_b_score:
+        return 1.0
+    if team_a_score < team_b_score:
+        return 0.0
+    return 0.5

@@ -72,3 +72,27 @@ def test_real_state_at_quarter_start_matches_real_2023_pbp_for_a_known_game():
     assert state.defteam == expected["defteam"]
     assert state.posteam_score == int(expected["posteam_score"])
     assert state.defteam_score == int(expected["defteam_score"])
+
+
+from win_prob_eval import real_outcome
+
+
+def _game_row(**overrides):
+    base = {"home_team": "KC", "away_team": "SF", "home_score": 24.0, "away_score": 20.0}
+    base.update(overrides)
+    return base
+
+
+def test_real_outcome_team_a_is_home_and_wins():
+    game_df = pd.DataFrame([_game_row(home_score=24.0, away_score=20.0)])
+    assert real_outcome(game_df, team_a="KC") == 1.0
+
+
+def test_real_outcome_team_a_is_away_and_loses():
+    game_df = pd.DataFrame([_game_row(home_score=24.0, away_score=20.0)])
+    assert real_outcome(game_df, team_a="SF") == 0.0
+
+
+def test_real_outcome_tie_returns_half():
+    game_df = pd.DataFrame([_game_row(home_score=17.0, away_score=17.0)])
+    assert real_outcome(game_df, team_a="KC") == 0.5
