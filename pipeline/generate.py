@@ -5,10 +5,20 @@ Scope, per an explicit decision (this is bigger than everything else in v0
 combined, so it was scoped deliberately rather than guessed): SCRIMMAGE
 PLAYS ONLY. The model's 4 output heads (yards_gained/touchdown/turnover/
 return_yards) predict a scrimmage play's outcome, applied to real down/
-distance/field-position/score transition logic. Everything else -- punts,
-field goals, kickoffs, 4th-down decisions, extra points, overtime -- uses
-simple fixed heuristics, just enough to keep a rollout moving without
-crashing. Not a faithful play-calling or special-teams model.
+distance/field-position/score transition logic.
+
+4th-down decisions, field goals, punts, and extra points now have real
+mechanics -- a 3-way decision (kick/punt/go-for-it) grounded in real
+2018-2023 pbp distributions, an empirical distance-based FG success model
+adjusted by each team's actual causal kicker FG%, a per-punter causal
+distance model, a real (non-100%) XP success rate, turnover-on-downs for
+a failed go-for-it, and sudden-death overtime -- see
+docs/superpowers/specs/2026-08-19-special-teams-modeling-design.md for the
+full design and all the real-data grounding. Still genuinely simplified:
+kickoffs are always a touchback (no returns), blocked kicks/punts and
+2-point conversions aren't modeled, and personnel (including which player
+is on the field) stays fixed for the whole rollout -- no substitutions, no
+in-game roster changes.
 
 Two things the model can't do (yet), worked around here:
   - play_type isn't predicted (model.py explains why: it's currently only

@@ -556,3 +556,36 @@ def test_simulator_without_special_teams_lookup_leaves_stats_none(small_dataset)
     assert sim.team_b_fg_pct is None
     assert sim.team_a_punt_avg is None
     assert sim.team_b_punt_avg is None
+
+
+def test_generate_rollout_with_real_special_teams_data_and_team_form_coexist(small_dataset):
+    from special_teams_features import SpecialTeamsFeatureLookup
+    from generate import GameSimulator, GameState
+    from model import GameTransformer
+
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+    seed_game_id = small_dataset.examples[0]["game_id"]
+    special_teams = SpecialTeamsFeatureLookup([2022, 2023], data_dir="../data")
+    sim = GameSimulator(model, small_dataset, seed_game_id, device="cpu", special_teams=special_teams)
+
+    # snapshot the resolved special-teams stats BEFORE any plays run
+    pre_rollout_stats = (sim.team_a_fg_pct, sim.team_b_fg_pct, sim.team_a_punt_avg, sim.team_b_punt_avg)
+    assert sim.form_state == {}
+
+    initial = GameState(
+        quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
+        posteam=sim.team_a, defteam=sim.team_b, posteam_score=0, defteam_score=0,
+    )
+    generator = torch.Generator().manual_seed(7)
+    log = sim.generate(20, initial, generator=generator)
+
+    assert len(log) > 0
+    # team_form evolved across the rollout (same invariant as the earlier
+    # team_form-only test), while the special-teams stats resolved at
+    # __init__ time are untouched by anything that happened during play --
+    # they're per-rollout constants (fixed personnel/kicker snapshot,
+    # consistent with the existing "no substitution modeling" simplification).
+    assert sim.form_state != {}
+    assert (sim.team_a_fg_pct, sim.team_b_fg_pct, sim.team_a_punt_avg, sim.team_b_punt_avg) == pre_rollout_stats
