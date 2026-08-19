@@ -14,7 +14,11 @@ import random
 import pandas as pd
 import torch
 
+from dataset import PlayDataset
 from generate import GameState
+from model import GameTransformer
+from special_teams_features import SpecialTeamsFeatureLookup
+from train import CACHE_PATH, CHECKPOINT_PATH, DATA_DIR, DEVICE, HISTORY_SEASONS, SEED, TRAINING_SEASONS
 
 QUARTERS = [1, 2, 3, 4]
 N_EVAL_GAMES = 25
@@ -177,3 +181,47 @@ def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
             csv_rows.append({"game_id": game_id, "quarter": quarter, "p_hat": p_hat, "y": y})
 
     return records_by_quarter, csv_rows, skipped
+
+
+def main():
+    print(f"device: {DEVICE}")
+    checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE, weights_only=False)
+    print(f"loaded checkpoint from step {checkpoint['step']}, val_loss {checkpoint['val_loss']:.4f}")
+
+    print(f"building dataset (cache: {CACHE_PATH})...")
+    dataset = PlayDataset(HISTORY_SEASONS, TRAINING_SEASONS, DATA_DIR, cache_path=CACHE_PATH)
+
+    model = GameTransformer(checkpoint["vocabs"], **checkpoint["hyperparameters"]).to(DEVICE)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    print(f"loading raw pbp for seasons {TRAINING_SEASONS}...")
+    pbp = load_pbp_for_seasons(TRAINING_SEASONS, DATA_DIR)
+
+    print("loading special-teams (kicker/punter) data...")
+    special_teams = SpecialTeamsFeatureLookup(TRAINING_SEASONS, DATA_DIR)
+
+    game_ids = sample_validation_games(dataset, N_EVAL_GAMES, SEED)
+    print(f"evaluating {len(game_ids)} validation games x {len(QUARTERS)} in-game points x "
+          f"{ROLLOUTS_PER_STATE} rollouts each...")
+
+    records_by_quarter, csv_rows, skipped = evaluate(
+        model, dataset, pbp, game_ids, DEVICE, special_teams=special_teams,
+    )
+    print(f"skipped {skipped} game-quarter points with no real scrimmage play that quarter")
+
+    summary = summarize(records_by_quarter)
+    print("\n--- Monte Carlo win-probability evaluation ---")
+    print(f"{'quarter':10s}{'n':>6s}{'accuracy':>12s}{'brier':>10s}")
+    for quarter in QUARTERS:
+        m = summary[quarter]
+        print(f"Q{quarter:<9d}{m['n']:>6d}{m['accuracy']*100:>11.1f}%{m['brier']:>10.4f}")
+    m = summary["overall"]
+    print(f"{'overall':10s}{m['n']:>6d}{m['accuracy']*100:>11.1f}%{m['brier']:>10.4f}")
+
+    pd.DataFrame(csv_rows).to_csv(RESULTS_CSV_PATH, index=False)
+    print(f"\nraw per-state results written to {RESULTS_CSV_PATH}")
+
+
+if __name__ == "__main__":
+    main()
