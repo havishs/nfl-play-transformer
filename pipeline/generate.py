@@ -141,9 +141,9 @@ def _weighted_choice(weights, generator):
     return keys[idx]
 
 
-def _punt(state, punter_avg_distance):
+def _punt(state, punter_avg_distance, generator):
     """punter_avg_distance: causal career average gross kick_distance for the punting team's punter, or None if unknown (falls back to the league average)."""
-    if random.random() < PUNT_TOUCHBACK_RATE:
+    if _rand(generator) < PUNT_TOUCHBACK_RATE:
         return state.flip_possession(
             down=1, ydstogo=10, yardline_100=PUNT_TOUCHBACK_YARDLINE_100,
             play_in_quarter=state.play_in_quarter + 1,
@@ -348,7 +348,7 @@ class GameSimulator:
             if state.down > 3:
                 decision = _fourth_down_decision(state)
                 if decision == "punt":
-                    state = _normalize_quarter(_punt(state, self._punt_avg_for(state.posteam)))
+                    state = _normalize_quarter(_punt(state, self._punt_avg_for(state.posteam), generator))
                     log.append({"event": "punt", "state": state})
                     continue
                 if decision == "fg":

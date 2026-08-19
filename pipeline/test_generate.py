@@ -208,12 +208,13 @@ def test_apply_turnover_on_downs_flips_possession_no_return():
 
 
 def test_punt_uses_punter_average_when_known():
-    import random
     from generate import GameState, _punt, PUNT_AVG_RETURN_YARDS
-    random.seed(1)  # avoid the touchback branch for this deterministic check
+    # seed 0 -> draw ~0.496, comfortably above PUNT_TOUCHBACK_RATE (0.067),
+    # avoiding the touchback branch for this deterministic check
+    generator = torch.Generator().manual_seed(0)
     state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
                        posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
-    new_state = _punt(state, punter_avg_distance=35.0)
+    new_state = _punt(state, punter_avg_distance=35.0, generator=generator)
     # net = 35.0 - PUNT_AVG_RETURN_YARDS; kicking spot = 65 - net; receiving yardline_100 = 100 - kicking spot
     # -- deliberately chosen to stay clear of the touchback clip (min(80, ...)),
     # so this test actually exercises the subtraction formula, not just the cap.
@@ -225,9 +226,9 @@ def test_punt_uses_punter_average_when_known():
 
 
 def test_punt_kicking_spot_clips_at_one_yard_line_for_a_long_punt_near_midfield():
-    import random
     from generate import GameState, _punt
-    random.seed(1)  # avoid the touchback branch
+    # seed 0 -> draw ~0.496, avoids the touchback branch (see test_punt_uses_punter_average_when_known)
+    generator = torch.Generator().manual_seed(0)
     # yardline_100=41 is just past FG range (so _fourth_down_decision would
     # actually punt from here in real play), with a strong punter (net ~54
     # after the average return yardage) -- net distance exceeds the distance
@@ -245,17 +246,17 @@ def test_punt_kicking_spot_clips_at_one_yard_line_for_a_long_punt_near_midfield(
     # not, by itself, distinguish a broken max(1, ...) clip from correct code.
     state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=41,
                        posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
-    new_state = _punt(state, punter_avg_distance=58.0)
+    new_state = _punt(state, punter_avg_distance=58.0, generator=generator)
     assert new_state.yardline_100 == 80
 
 
 def test_punt_falls_back_to_league_average_when_punter_unknown():
-    import random
     from generate import GameState, _punt, LEAGUE_AVG_PUNT_DISTANCE, PUNT_AVG_RETURN_YARDS
-    random.seed(1)  # avoid the touchback branch
+    # seed 0 -> draw ~0.496, avoids the touchback branch (see test_punt_uses_punter_average_when_known)
+    generator = torch.Generator().manual_seed(0)
     state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
                        posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
-    new_state = _punt(state, punter_avg_distance=None)
+    new_state = _punt(state, punter_avg_distance=None, generator=generator)
     assert new_state.posteam == "SF"  # sanity: possession still flips either way
 
     expected_net = LEAGUE_AVG_PUNT_DISTANCE - PUNT_AVG_RETURN_YARDS
@@ -264,19 +265,15 @@ def test_punt_falls_back_to_league_average_when_punter_unknown():
     assert new_state.yardline_100 == pytest.approx(expected_yardline_100, abs=1)
 
 
-def test_punt_touchback_spot_is_the_20_not_the_25():
-    import random
+def test_punt_touchback_spot_is_the_20_not_the_25(monkeypatch):
+    import generate as gen_module
     from generate import GameState, _punt, PUNT_TOUCHBACK_YARDLINE_100
     assert PUNT_TOUCHBACK_YARDLINE_100 == 80  # own 20 -- distinct from kickoff's 75 (own 25)
 
-    original_random = random.random
-    random.random = lambda: 0.0  # forces the touchback branch unconditionally
-    try:
-        state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
-                           posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
-        new_state = _punt(state, punter_avg_distance=45.0)
-    finally:
-        random.random = original_random
+    monkeypatch.setattr(gen_module, "_rand", lambda generator: 0.0)  # forces the touchback branch unconditionally
+    state = GameState(quarter=2, play_in_quarter=10, down=4, ydstogo=8, yardline_100=65,
+                       posteam="KC", defteam="SF", posteam_score=0, defteam_score=0)
+    new_state = _punt(state, punter_avg_distance=45.0, generator=torch.Generator().manual_seed(0))
 
     assert new_state.yardline_100 == PUNT_TOUCHBACK_YARDLINE_100
     assert new_state.down == 1 and new_state.ydstogo == 10
