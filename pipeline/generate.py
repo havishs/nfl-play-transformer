@@ -38,7 +38,6 @@ bucket's midpoint (BUCKET_MIDPOINT below, derived from situational.py's own
 edges, not invented). This is a genuine (documented) simplification.
 """
 
-import random
 from dataclasses import dataclass, replace
 
 import torch
@@ -362,9 +361,7 @@ class GameSimulator:
                 # turnover_on_downs branch further down in the outcome
                 # dispatch (state.down == 4 and it wasn't a score/turnover).
 
-            play_type = random.choices(
-                list(PASS_RUN_WEIGHTS), weights=list(PASS_RUN_WEIGHTS.values())
-            )[0]
+            play_type = _weighted_choice(PASS_RUN_WEIGHTS, generator)
             step = self._tensorize_step(state, play_type)
             window.append(step)
             window = window[-self.block_size:]
