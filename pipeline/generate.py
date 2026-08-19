@@ -129,6 +129,18 @@ def _sample_class(logits, generator):
     return torch.multinomial(probs, num_samples=1, generator=generator).item()
 
 
+def _rand(generator):
+    # uniform float in [0, 1) -- CPU-only, same generator convention as _sample_class.
+    return torch.rand(1, generator=generator).item()
+
+
+def _weighted_choice(weights, generator):
+    keys = list(weights)
+    values = torch.tensor(list(weights.values()))
+    idx = torch.multinomial(values, num_samples=1, generator=generator).item()
+    return keys[idx]
+
+
 def _punt(state, punter_avg_distance):
     """punter_avg_distance: causal career average gross kick_distance for the punting team's punter, or None if unknown (falls back to the league average)."""
     if random.random() < PUNT_TOUCHBACK_RATE:

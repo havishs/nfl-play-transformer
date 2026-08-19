@@ -641,3 +641,34 @@ def test_long_rollout_with_real_special_teams_data_holds_invariants(small_datase
             assert s.posteam_score >= 0 and s.defteam_score >= 0
             assert s.posteam != s.defteam
             assert {s.posteam, s.defteam} == {sim.team_a, sim.team_b}
+
+
+def test_rand_is_deterministic_given_a_seeded_generator():
+    from generate import _rand
+    g1 = torch.Generator().manual_seed(42)
+    g2 = torch.Generator().manual_seed(42)
+    assert _rand(g1) == _rand(g2)
+
+
+def test_rand_returns_a_value_in_zero_one():
+    from generate import _rand
+    g = torch.Generator().manual_seed(1)
+    for _ in range(20):
+        v = _rand(g)
+        assert 0.0 <= v < 1.0
+
+
+def test_weighted_choice_is_deterministic_given_a_seeded_generator():
+    from generate import _weighted_choice
+    weights = {"pass": 0.57, "run": 0.43}
+    g1 = torch.Generator().manual_seed(3)
+    g2 = torch.Generator().manual_seed(3)
+    assert _weighted_choice(weights, g1) == _weighted_choice(weights, g2)
+
+
+def test_weighted_choice_only_returns_known_keys():
+    from generate import _weighted_choice
+    weights = {"pass": 0.57, "run": 0.43}
+    g = torch.Generator().manual_seed(9)
+    for _ in range(20):
+        assert _weighted_choice(weights, g) in weights
