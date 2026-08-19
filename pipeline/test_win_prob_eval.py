@@ -203,3 +203,32 @@ def test_sample_validation_games_caps_at_available_val_games(small_dataset_for_s
     sampled = sample_validation_games(small_dataset_for_sampling, n_games=10_000, seed=1)
     from get_batch import build_game_index
     assert len(sampled) <= len(build_game_index(small_dataset_for_sampling.examples))
+
+
+from win_prob_eval import summarize
+
+
+def test_summarize_hand_computed_accuracy_and_brier():
+    records_by_quarter = {
+        1: [(0.8, 1.0), (0.3, 0.0)],  # both correct
+        2: [(0.5, 1.0)],               # p_hat == 0.5 always counts as incorrect
+    }
+    summary = summarize(records_by_quarter)
+
+    assert summary[1]["n"] == 2
+    assert summary[1]["accuracy"] == pytest.approx(1.0)
+    assert summary[1]["brier"] == pytest.approx(((0.8 - 1.0) ** 2 + (0.3 - 0.0) ** 2) / 2)
+
+    assert summary[2]["n"] == 1
+    assert summary[2]["accuracy"] == pytest.approx(0.0)
+    assert summary[2]["brier"] == pytest.approx((0.5 - 1.0) ** 2)
+
+    assert summary["overall"]["n"] == 3
+    assert summary["overall"]["accuracy"] == pytest.approx(2 / 3)
+
+
+def test_summarize_handles_an_empty_quarter():
+    summary = summarize({1: [], 2: [(0.9, 1.0)]})
+    assert summary[1]["n"] == 0
+    assert summary[1]["accuracy"] != summary[1]["accuracy"]  # NaN
+    assert summary["overall"]["n"] == 1

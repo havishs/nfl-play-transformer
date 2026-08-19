@@ -110,3 +110,27 @@ def sample_validation_games(dataset, n_games, seed):
     val_game_ids = game_ids[-n_val:]
     rng = random.Random(seed)
     return sorted(rng.sample(val_game_ids, min(n_games, len(val_game_ids))))
+
+
+def _is_correct(p_hat, y):
+    if p_hat == 0.5:
+        return False
+    predicted_a_wins = p_hat > 0.5
+    actual_a_wins = y > 0.5
+    return predicted_a_wins == actual_a_wins
+
+
+def _metrics(records):
+    if not records:
+        return {"n": 0, "accuracy": float("nan"), "brier": float("nan")}
+    correct = sum(1 for p_hat, y in records if _is_correct(p_hat, y))
+    brier = sum((p_hat - y) ** 2 for p_hat, y in records) / len(records)
+    return {"n": len(records), "accuracy": correct / len(records), "brier": brier}
+
+
+def summarize(records_by_quarter):
+    """records_by_quarter: dict quarter -> list of (p_hat, y). Adds an "overall" key pooling every quarter."""
+    summary = {quarter: _metrics(records) for quarter, records in records_by_quarter.items()}
+    all_records = [r for records in records_by_quarter.values() for r in records]
+    summary["overall"] = _metrics(all_records)
+    return summary
