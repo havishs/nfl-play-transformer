@@ -74,6 +74,26 @@ def test_overtime_continues_when_tied_and_stops_on_first_score(simulator):
     # invariant (stop-on-score) just wasn't exercised this run
 
 
+def test_punt_crossing_into_overtime_does_not_end_a_tied_game(simulator):
+    from dataclasses import replace
+    from generate import PLAYS_PER_QUARTER
+    # deterministic: out of FG range (yardline_100=65 > FG_RANGE_YARDLINE_100)
+    # and not short-yardage (ydstogo=10 > GO_FOR_IT_SHORT_YDSTOGO), so
+    # _fourth_down_decision always returns "punt" here -- no model sampling
+    # involved, so this doesn't depend on any seed getting lucky.
+    boundary_state = replace(
+        _initial_state(simulator), quarter=4, play_in_quarter=PLAYS_PER_QUARTER - 1,
+        down=4, ydstogo=10, yardline_100=65, posteam_score=14, defteam_score=14,
+    )
+    generator = torch.Generator().manual_seed(6)
+    log = simulator.generate(2, boundary_state, generator=generator)
+
+    assert len(log) == 2, "the punt crossing into a still-tied Q5 must not end the game early"
+    assert log[0]["event"] == "punt"
+    assert log[0]["state"].quarter == 5  # crossed into overtime
+    assert log[0]["state"].posteam_score == log[0]["state"].defteam_score  # still tied
+
+
 def test_fourth_down_punts_when_out_of_range_and_not_short(simulator):
     # _initial_state's yardline_100=75/ydstogo=10 is out of FG range and not
     # short-yardage -- one specific case of the 4th-down decision, not a
