@@ -589,3 +589,55 @@ def test_generate_rollout_with_real_special_teams_data_and_team_form_coexist(sma
     # consistent with the existing "no substitution modeling" simplification).
     assert sim.form_state != {}
     assert (sim.team_a_fg_pct, sim.team_b_fg_pct, sim.team_a_punt_avg, sim.team_b_punt_avg) == pre_rollout_stats
+
+
+def test_long_rollout_with_real_special_teams_data_holds_invariants(small_dataset):
+    from special_teams_features import SpecialTeamsFeatureLookup
+    from generate import GameSimulator, GameState
+
+    torch.manual_seed(0)
+    from model import GameTransformer
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+    special_teams = SpecialTeamsFeatureLookup([2022, 2023], data_dir="../data")
+
+    # small_dataset.examples is grouped contiguously by game (all plays of one
+    # game before the next begins), so a plain range(0, 5) over example
+    # *indices* lands on the same game_id five times -- it only varies the
+    # generator seed, not the underlying team/kicker/punter data. Walk the
+    # examples to find the first index of each distinct game_id instead, so
+    # the sweep actually mixes teams (and therefore real special-teams stats)
+    # in addition to seeds. Verified against real data: small_dataset (2022
+    # history / 2023 training, max_examples=1500) contains 10 distinct games.
+    distinct_game_ids = []
+    seen = set()
+    for ex in small_dataset.examples:
+        if ex["game_id"] not in seen:
+            seen.add(ex["game_id"])
+            distinct_game_ids.append(ex["game_id"])
+    seed_game_ids = distinct_game_ids[:5]
+    assert len(seed_game_ids) >= 2, "small_dataset should contain multiple distinct games to sweep over"
+
+    # sweep several seeds (and, per the above, several real games) to
+    # exercise a real mix of FG/punt/go-for-it/OT outcomes over a long
+    # rollout, with real (non-None) kicker/punter data active throughout --
+    # not just the short/targeted tests elsewhere.
+    for seed_offset, seed_game_id in enumerate(seed_game_ids):
+        sim = GameSimulator(model, small_dataset, seed_game_id, device="cpu", special_teams=special_teams)
+        initial = GameState(
+            quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
+            posteam=sim.team_a, defteam=sim.team_b, posteam_score=0, defteam_score=0,
+        )
+        generator = torch.Generator().manual_seed(seed_offset)
+        log = sim.generate(300, initial, generator=generator)
+
+        assert len(log) > 0
+        for entry in log:
+            s = entry["state"]
+            assert 1 <= s.down <= 4
+            assert 0 <= s.yardline_100 <= 100
+            assert isinstance(s.yardline_100, int), f"yardline_100 should be a clean int, got {s.yardline_100!r}"
+            assert 1 <= s.ydstogo <= 100
+            assert s.posteam_score >= 0 and s.defteam_score >= 0
+            assert s.posteam != s.defteam
+            assert {s.posteam, s.defteam} == {sim.team_a, sim.team_b}

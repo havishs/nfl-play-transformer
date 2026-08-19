@@ -139,7 +139,7 @@ def _punt(state, punter_avg_distance):
     gross_distance = punter_avg_distance if punter_avg_distance is not None else LEAGUE_AVG_PUNT_DISTANCE
     net_distance = gross_distance - PUNT_AVG_RETURN_YARDS
     kicking_yardline_100 = max(1, state.yardline_100 - net_distance)
-    receiving_yardline_100 = min(PUNT_TOUCHBACK_YARDLINE_100, 100 - kicking_yardline_100)
+    receiving_yardline_100 = int(round(min(PUNT_TOUCHBACK_YARDLINE_100, 100 - kicking_yardline_100)))
     return state.flip_possession(
         down=1, ydstogo=10, yardline_100=receiving_yardline_100,
         play_in_quarter=state.play_in_quarter + 1,
