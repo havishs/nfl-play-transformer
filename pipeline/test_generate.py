@@ -96,23 +96,41 @@ def test_fourth_down_decision_goes_for_it_when_desperate_regardless_of_distance(
     assert _fourth_down_decision(state) == "go"
 
 
-def test_fg_make_probability_short_kick_is_high(monkeypatch):
+def test_fg_make_probability_short_kick_is_high():
     from generate import _fg_make_probability
     p = _fg_make_probability(kick_distance=25, kicker_fg_pct=None)
-    assert p > 0.9
+    assert p == pytest.approx(0.98)  # 20-29yd bucket, league-average kicker
 
 
 def test_fg_make_probability_long_kick_is_low():
     from generate import _fg_make_probability
     p = _fg_make_probability(kick_distance=68, kicker_fg_pct=None)
-    assert p < 0.5
+    assert p == pytest.approx(0.37)  # 60+yd bucket, league-average kicker
 
 
-def test_fg_make_probability_good_kicker_beats_average(monkeypatch):
-    from generate import _fg_make_probability
+def test_fg_make_probability_good_kicker_beats_average():
+    from generate import _fg_make_probability, LEAGUE_AVG_FG_PCT
     p_avg = _fg_make_probability(kick_distance=45, kicker_fg_pct=None)
     p_good = _fg_make_probability(kick_distance=45, kicker_fg_pct=0.95)
+    assert p_avg == pytest.approx(0.78)  # 40-49yd bucket baseline, no adjustment
+    assert p_good == pytest.approx(0.78 + (0.95 - LEAGUE_AVG_FG_PCT))
     assert p_good > p_avg
+
+
+def test_fg_make_probability_bucket_boundaries_are_correct():
+    from generate import _fg_make_probability, FG_DISTANCE_BASELINE
+    # edges: [19, 29, 39, 49, 59] -> buckets [<20, 20-29, 30-39, 40-49, 50-59, 60+]
+    # each edge value itself lands in the bucket BELOW it (inclusive)
+    cases = [
+        (19, FG_DISTANCE_BASELINE[0]), (20, FG_DISTANCE_BASELINE[1]),
+        (29, FG_DISTANCE_BASELINE[1]), (30, FG_DISTANCE_BASELINE[2]),
+        (39, FG_DISTANCE_BASELINE[2]), (40, FG_DISTANCE_BASELINE[3]),
+        (49, FG_DISTANCE_BASELINE[3]), (50, FG_DISTANCE_BASELINE[4]),
+        (59, FG_DISTANCE_BASELINE[4]), (60, FG_DISTANCE_BASELINE[5]),
+    ]
+    for kick_distance, expected_baseline in cases:
+        result = _fg_make_probability(kick_distance, kicker_fg_pct=None)
+        assert result == pytest.approx(expected_baseline), f"kick_distance={kick_distance}"
 
 
 def test_attempt_field_goal_certain_make_adds_three():
