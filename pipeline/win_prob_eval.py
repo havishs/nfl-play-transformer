@@ -14,11 +14,16 @@ import random
 import pandas as pd
 import torch
 
+import team_form as tf
 from dataset import PlayDataset
-from generate import GameState
+from generate import GameSimulator, GameState
+from get_batch import build_game_index
 from model import GameTransformer
 from special_teams_features import SpecialTeamsFeatureLookup
-from train import CACHE_PATH, CHECKPOINT_PATH, DATA_DIR, DEVICE, HISTORY_SEASONS, SEED, TRAINING_SEASONS
+from train import (
+    CACHE_PATH, CHECKPOINT_PATH, DATA_DIR, DEVICE, HISTORY_SEASONS, SEED,
+    TRAINING_SEASONS, VAL_FRACTION,
+)
 
 QUARTERS = [1, 2, 3, 4]
 N_EVAL_GAMES = 25
@@ -64,6 +69,13 @@ def rollout_outcome(sim, log, initial_state):
     """
     "team_a", "team_b", or "unresolved" (MAX_PLAYS exhausted mid-overtime,
     still tied -- counted as 0.5/0.5 credit by win_probability).
+
+    "Unresolved" is detected via a proxy -- quarter > 4 and the score still
+    tied -- rather than a direct signal that generate()'s play loop ran out
+    of plays without its own score-differs-in-OT stopping condition firing.
+    This proxy is correct given this harness's constants (MAX_PLAYS=400 is
+    generous relative to generate.py's PLAYS_PER_QUARTER=~43), but if those
+    constants change, re-examine whether the proxy still holds.
     """
     final = log[-1]["state"] if log else initial_state
     if final.quarter > 4 and final.posteam_score == final.defteam_score:
@@ -89,6 +101,7 @@ def state_seed(game_id, quarter):
 def win_probability(sim, initial_state, n_rollouts, base_seed, max_plays):
     wins_a = 0.0
     for i in range(n_rollouts):
+        sim.form_state = tf.initial_team_form()
         generator = torch.Generator().manual_seed(base_seed + i)
         log = sim.generate(max_plays, initial_state, generator=generator)
         outcome = rollout_outcome(sim, log, initial_state)
@@ -107,9 +120,6 @@ def sample_validation_games(dataset, n_games, seed):
     full validation set (full-set compute is not tractable given generate()
     isn't batched across rollouts).
     """
-    from get_batch import build_game_index
-    from train import VAL_FRACTION
-
     game_ids = sorted(build_game_index(dataset.examples).keys())
     n_val = max(1, round(len(game_ids) * VAL_FRACTION))
     val_game_ids = game_ids[-n_val:]
@@ -159,7 +169,7 @@ def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
     skipped counts game-quarter points with no real scrimmage play that
     quarter (see real_state_at_quarter_start).
     """
-    from generate import GameSimulator
+    model.eval()
 
     records_by_quarter = {q: [] for q in QUARTERS}
     csv_rows = []

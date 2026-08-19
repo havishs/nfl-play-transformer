@@ -1,7 +1,41 @@
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
+import torch
 
-from win_prob_eval import real_state_at_quarter_start
+import team_form as tf
+from dataset import PlayDataset
+from generate import GameSimulator, GameState
+from get_batch import build_game_index
+from model import GameTransformer
+from train import VAL_FRACTION
+from win_prob_eval import (
+    evaluate,
+    game_rows,
+    load_pbp_for_seasons,
+    real_outcome,
+    real_state_at_quarter_start,
+    rollout_outcome,
+    sample_validation_games,
+    state_seed,
+    summarize,
+    win_probability,
+)
+
+
+@pytest.fixture(scope="module")
+def small_dataset():
+    return PlayDataset(history_seasons=[2022], training_seasons=[2023], data_dir="../data", max_examples=1500)
+
+
+@pytest.fixture(scope="module")
+def simulator(small_dataset):
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+    seed_game_id = small_dataset.examples[0]["game_id"]
+    return GameSimulator(model, small_dataset, seed_game_id, device="cpu")
 
 
 def _pbp_row(**overrides):
@@ -74,9 +108,6 @@ def test_real_state_at_quarter_start_matches_real_2023_pbp_for_a_known_game():
     assert state.defteam_score == int(expected["defteam_score"])
 
 
-from win_prob_eval import real_outcome
-
-
 def _game_row(**overrides):
     base = {"home_team": "KC", "away_team": "SF", "home_score": 24.0, "away_score": 20.0}
     base.update(overrides)
@@ -96,14 +127,6 @@ def test_real_outcome_team_a_is_away_and_loses():
 def test_real_outcome_tie_returns_half():
     game_df = pd.DataFrame([_game_row(home_score=17.0, away_score=17.0)])
     assert real_outcome(game_df, team_a="KC") == 0.5
-
-
-from types import SimpleNamespace
-
-import torch
-
-from win_prob_eval import rollout_outcome, win_probability, state_seed
-from generate import GameState
 
 
 def _final_state(**overrides):
@@ -150,6 +173,7 @@ def test_win_probability_tallies_wins_and_unresolved_as_half_credit(monkeypatch)
     class FakeSim:
         team_a = "KC"
         team_b = "SF"
+        form_state = tf.initial_team_form()
 
         def generate(self, n_plays, initial_state, generator=None):
             state = outcomes[calls["i"] % len(outcomes)]
@@ -162,6 +186,34 @@ def test_win_probability_tallies_wins_and_unresolved_as_half_credit(monkeypatch)
     assert p_hat == pytest.approx(0.5)
 
 
+def test_win_probability_final_form_state_matches_a_single_fresh_rollout(simulator):
+    # Regression test for form_state contamination across "independent"
+    # rollouts: GameSimulator.generate() mutates sim.form_state as a side
+    # effect and never resets it, so without an explicit reset each
+    # successive rollout within one win_probability() call would see a
+    # team_form input polluted by every prior rollout's fictitious plays.
+    # If form_state is correctly reset before each rollout, then running
+    # win_probability with n_rollouts=3 should leave sim.form_state in
+    # exactly the same state as running a single rollout with the seed of
+    # the *last* of those three (base_seed + n_rollouts - 1) -- because each
+    # rollout starts from a clean slate regardless of what came before it in
+    # the loop.
+    initial_state = GameState(
+        quarter=1, play_in_quarter=0, down=1, ydstogo=10, yardline_100=75,
+        posteam=simulator.team_a, defteam=simulator.team_b, posteam_score=0, defteam_score=0,
+    )
+
+    win_probability(simulator, initial_state, n_rollouts=3, base_seed=0, max_plays=10)
+    form_state_after_three = simulator.form_state
+
+    simulator.form_state = tf.initial_team_form()
+    generator = torch.Generator().manual_seed(0 + 2)  # base_seed + (n_rollouts - 1)
+    simulator.generate(10, initial_state, generator=generator)
+    form_state_after_one_matching_seed = simulator.form_state
+
+    assert form_state_after_three == form_state_after_one_matching_seed
+
+
 def test_state_seed_is_deterministic_and_varies_by_game_and_quarter():
     a = state_seed("2023_01_KC_SF", 1)
     b = state_seed("2023_01_KC_SF", 1)
@@ -172,40 +224,24 @@ def test_state_seed_is_deterministic_and_varies_by_game_and_quarter():
     assert a != d
 
 
-from win_prob_eval import sample_validation_games
-
-
-@pytest.fixture(scope="module")
-def small_dataset_for_sampling():
-    from dataset import PlayDataset
-    return PlayDataset(history_seasons=[2022], training_seasons=[2023], data_dir="../data", max_examples=1500)
-
-
-def test_sample_validation_games_is_deterministic(small_dataset_for_sampling):
-    first = sample_validation_games(small_dataset_for_sampling, n_games=3, seed=42)
-    second = sample_validation_games(small_dataset_for_sampling, n_games=3, seed=42)
+def test_sample_validation_games_is_deterministic(small_dataset):
+    first = sample_validation_games(small_dataset, n_games=3, seed=42)
+    second = sample_validation_games(small_dataset, n_games=3, seed=42)
     assert first == second
 
 
-def test_sample_validation_games_stays_within_the_held_out_split(small_dataset_for_sampling):
-    from get_batch import build_game_index
-    from train import VAL_FRACTION
-
-    game_ids = sorted(build_game_index(small_dataset_for_sampling.examples).keys())
+def test_sample_validation_games_stays_within_the_held_out_split(small_dataset):
+    game_ids = sorted(build_game_index(small_dataset.examples).keys())
     n_val = max(1, round(len(game_ids) * VAL_FRACTION))
     val_game_ids = set(game_ids[-n_val:])
 
-    sampled = sample_validation_games(small_dataset_for_sampling, n_games=3, seed=42)
+    sampled = sample_validation_games(small_dataset, n_games=3, seed=42)
     assert set(sampled) <= val_game_ids
 
 
-def test_sample_validation_games_caps_at_available_val_games(small_dataset_for_sampling):
-    sampled = sample_validation_games(small_dataset_for_sampling, n_games=10_000, seed=1)
-    from get_batch import build_game_index
-    assert len(sampled) <= len(build_game_index(small_dataset_for_sampling.examples))
-
-
-from win_prob_eval import summarize
+def test_sample_validation_games_caps_at_available_val_games(small_dataset):
+    sampled = sample_validation_games(small_dataset, n_games=10_000, seed=1)
+    assert len(sampled) <= len(build_game_index(small_dataset.examples))
 
 
 def test_summarize_hand_computed_accuracy_and_brier():
@@ -234,28 +270,17 @@ def test_summarize_handles_an_empty_quarter():
     assert summary["overall"]["n"] == 1
 
 
-from win_prob_eval import evaluate, load_pbp_for_seasons, game_rows
-
-
-@pytest.fixture(scope="module")
-def small_dataset_for_evaluate():
-    from dataset import PlayDataset
-    return PlayDataset(history_seasons=[2022], training_seasons=[2023], data_dir="../data", max_examples=1500)
-
-
-def test_evaluate_end_to_end_smoke(small_dataset_for_evaluate):
-    from model import GameTransformer
-
+def test_evaluate_end_to_end_smoke(small_dataset):
     torch.manual_seed(0)
-    model = GameTransformer(small_dataset_for_evaluate.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
     model.eval()
 
-    game_id = small_dataset_for_evaluate.examples[0]["game_id"]
+    game_id = small_dataset.examples[0]["game_id"]
     season = int(game_id.split("_")[0])
     pbp = load_pbp_for_seasons([season], data_dir="../data")
 
     records_by_quarter, csv_rows, skipped = evaluate(
-        model, small_dataset_for_evaluate, pbp, [game_id], device="cpu",
+        model, small_dataset, pbp, [game_id], device="cpu",
         rollouts_per_state=3, max_plays=15,
     )
 
