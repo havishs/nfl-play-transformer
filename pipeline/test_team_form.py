@@ -71,9 +71,22 @@ def test_turnover_updates_turnover_ema_not_touchdown_ema():
     assert feats[2] == 1.0  # turnover_ema == the observed value (bootstrap)
 
 
-def test_nan_posteam_or_defteam_raises():
+def test_nan_posteam_or_defteam_raises_when_play_is_applicable():
     state = initial_team_form()
     with pytest.raises(AssertionError):
         update_team_form(state, float("nan"), "SF", 10.0, True, False, False, True)
     with pytest.raises(AssertionError):
         update_team_form(state, "KC", float("nan"), 10.0, True, False, False, True)
+
+
+def test_nan_posteam_and_defteam_does_not_raise_and_leaves_real_teams_untouched_when_not_applicable():
+    # real pbp data has some non-applicable rows (e.g. certain no_play rows)
+    # with missing team codes -- these must NOT raise, and must not affect
+    # any real team's state, since they never touch team state either way.
+    # Regression test for a real crash seen on the full 6-season dataset.
+    state = initial_team_form()
+    state = update_team_form(state, "KC", "SF", 10.0, True, False, False, True)
+    before = team_form_features(state, "KC", "SF")
+    result = update_team_form(state, float("nan"), float("nan"), 0.0, False, None, None, False)
+    after = team_form_features(result, "KC", "SF")
+    assert np.array_equal(before, after)

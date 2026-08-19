@@ -55,10 +55,17 @@ def update_team_form(form_state, posteam, defteam, yards_gained, yards_applicabl
     defteam's "defense" side updated from this play's outcome. Call this
     AFTER capturing this play's own team_form_features() -- the update
     reflects what's known starting from the NEXT play, not this one.
+
+    posteam/defteam are only validated (non-null, distinct) when the play
+    is actually applicable (yards_applicable or td_turnover_applicable) --
+    real pbp data has some non-applicable rows with missing team codes
+    (e.g. certain no_play rows), and those rows never touch team state
+    either way, so there's nothing to validate for them.
     """
-    assert pd.notna(posteam) and pd.notna(defteam), \
-        f"posteam and defteam must both be real values, got posteam={posteam!r} defteam={defteam!r}"
-    assert posteam != defteam, f"posteam and defteam must differ, got {posteam!r} for both"
+    if yards_applicable or td_turnover_applicable:
+        assert pd.notna(posteam) and pd.notna(defteam), \
+            f"posteam and defteam must both be real values on an applicable play, got posteam={posteam!r} defteam={defteam!r}"
+        assert posteam != defteam, f"posteam and defteam must differ, got {posteam!r} for both"
     new_state = dict(form_state)
     posteam_sides = dict(new_state.get(posteam, {"offense": _empty_side(), "defense": _empty_side()}))
     defteam_sides = dict(new_state.get(defteam, {"offense": _empty_side(), "defense": _empty_side()}))
