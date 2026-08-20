@@ -27,8 +27,17 @@ from train import (
 )
 
 QUARTERS = [1, 2, 3, 4]
-N_EVAL_GAMES = 25
-ROLLOUTS_PER_STATE = 500
+# Measured directly (real hyperparameters, n_embd=128/n_head=4/n_layer=4,
+# block_size=32): ~3.3s/rollout on CPU, dominated by per-play Python
+# overhead (tensor construction, dict lookups) rather than model FLOPs --
+# generate() runs one rollout at a time with batch size 1, so a GPU does not
+# meaningfully speed this up. N_EVAL_GAMES x len(QUARTERS) x
+# ROLLOUTS_PER_STATE = total rollouts; at 3.3s/rollout the values below
+# (5 x 4 x 60 = 1200 rollouts) are sized for a ~1hr first run. Bump both up
+# for a fuller evaluation once you've confirmed the actual runtime on your
+# hardware.
+N_EVAL_GAMES = 5
+ROLLOUTS_PER_STATE = 60
 MAX_PLAYS = 400
 RESULTS_CSV_PATH = "win_prob_results.csv"
 
