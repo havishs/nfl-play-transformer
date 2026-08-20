@@ -32,6 +32,20 @@ ROLLOUTS_PER_STATE = 500
 MAX_PLAYS = 400
 RESULTS_CSV_PATH = "win_prob_results.csv"
 
+# The raw pbp_{season}.parquet files have ~397 columns (see PROJECT_BRIEF.md);
+# this harness only ever reads the fields below (directly, or via
+# build_targets() inside real_form_state_before). Loading every column for
+# all 6 TRAINING_SEASONS at once is several hundred MB of unused data on top
+# of the already-loaded model/dataset in the same process -- enough to OOM a
+# memory-constrained Colab instance. Restricting the parquet read to just
+# these columns avoids that.
+PBP_COLUMNS = [
+    "game_id", "play_id", "qtr", "down", "ydstogo", "yardline_100",
+    "posteam", "defteam", "posteam_score", "defteam_score",
+    "home_team", "away_team", "home_score", "away_score",
+    "play_type", "yards_gained", "touchdown", "interception", "fumble_lost",
+]
+
 
 def real_state_at_quarter_start(game_df, quarter):
     """
@@ -211,7 +225,7 @@ def summarize(records_by_quarter):
 
 
 def load_pbp_for_seasons(seasons, data_dir):
-    frames = [pd.read_parquet(f"{data_dir}/pbp_{s}.parquet") for s in seasons]
+    frames = [pd.read_parquet(f"{data_dir}/pbp_{s}.parquet", columns=PBP_COLUMNS) for s in seasons]
     return pd.concat(frames, ignore_index=True)
 
 
