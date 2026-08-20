@@ -356,6 +356,67 @@ def test_evaluate_end_to_end_smoke(small_dataset):
         assert set(row.keys()) == {"game_id", "quarter", "p_hat", "y"}
 
 
+def test_evaluate_writes_results_incrementally_after_every_game(small_dataset, tmp_path, monkeypatch):
+    # Two distinct games so we can tell "wrote once at the end" apart from
+    # "wrote after every game" -- small_dataset (2022 history / 2023
+    # training, max_examples=1500) contains 10 distinct games (verified in
+    # test_generate.py's own long-rollout sweep test).
+    distinct_game_ids = []
+    seen = set()
+    for ex in small_dataset.examples:
+        if ex["game_id"] not in seen:
+            seen.add(ex["game_id"])
+            distinct_game_ids.append(ex["game_id"])
+    game_ids = distinct_game_ids[:2]
+    assert len(game_ids) == 2, "test setup error: small_dataset needs >=2 distinct games"
+
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+
+    seasons = sorted({int(gid.split("_")[0]) for gid in game_ids})
+    pbp = load_pbp_for_seasons(seasons, data_dir="../data")
+
+    write_count = {"n": 0}
+    real_to_csv = pd.DataFrame.to_csv
+
+    def spy_to_csv(self, *args, **kwargs):
+        write_count["n"] += 1
+        return real_to_csv(self, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", spy_to_csv)
+
+    results_path = str(tmp_path / "win_prob_results.csv")
+    records_by_quarter, csv_rows, skipped = evaluate(
+        model, small_dataset, pbp, game_ids, device="cpu",
+        rollouts_per_state=2, max_plays=200, results_path=results_path,
+    )
+
+    assert write_count["n"] == len(game_ids), "expected one CSV write per game, not just one at the end"
+
+    on_disk = pd.read_csv(results_path)
+    assert len(on_disk) == len(csv_rows)
+    assert set(on_disk["game_id"]) == set(game_ids)
+
+
+def test_evaluate_does_not_write_a_file_when_results_path_is_none(small_dataset, tmp_path, monkeypatch):
+    # Default behavior (no results_path) must have zero file-writing side
+    # effects -- this is what every other evaluate() test in this file
+    # relies on implicitly.
+    torch.manual_seed(0)
+    model = GameTransformer(small_dataset.vocabs, block_size=16, n_embd=32, n_head=2, n_layer=2, dropout=0.0)
+    model.eval()
+
+    game_id = small_dataset.examples[0]["game_id"]
+    season = int(game_id.split("_")[0])
+    pbp = load_pbp_for_seasons([season], data_dir="../data")  # loaded BEFORE chdir -- relative to pipeline/
+
+    monkeypatch.chdir(tmp_path)
+    evaluate(model, small_dataset, pbp, [game_id], device="cpu", rollouts_per_state=2, max_plays=200)
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_game_rows_sorts_by_play_id():
     pbp = pd.DataFrame([
         {"game_id": "g1", "play_id": 3.0, "qtr": 1.0},

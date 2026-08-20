@@ -28,15 +28,16 @@ from train import (
 
 QUARTERS = [1, 2, 3, 4]
 # Measured directly (real hyperparameters, n_embd=128/n_head=4/n_layer=4,
-# block_size=32): ~3.3s/rollout on CPU, dominated by per-play Python
-# overhead (tensor construction, dict lookups) rather than model FLOPs --
-# generate() runs one rollout at a time with batch size 1, so a GPU does not
-# meaningfully speed this up. N_EVAL_GAMES x len(QUARTERS) x
-# ROLLOUTS_PER_STATE = total rollouts; at 3.3s/rollout the values below
-# (5 x 4 x 60 = 1200 rollouts) are sized for a ~1hr first run. Bump both up
-# for a fuller evaluation once you've confirmed the actual runtime on your
-# hardware.
-N_EVAL_GAMES = 5
+# block_size=32): ~3.3s/rollout locally on CPU, and ~3.0s/rollout on a real
+# Colab run (5 x 4 x 60 = 1200 rollouts, ~1hr wall-clock) -- confirms the
+# bottleneck is per-play Python overhead (tensor construction, dict
+# lookups), not model FLOPs, so a GPU does not meaningfully speed this up
+# (generate() runs one rollout at a time with batch size 1). N_EVAL_GAMES x
+# len(QUARTERS) x ROLLOUTS_PER_STATE = total rollouts; at ~3s/rollout the
+# values below (20 x 4 x 60 = 4800 rollouts) are sized for a ~4hr run.
+# Adjust for your own time budget -- see the design doc's compute-budget
+# section for the reasoning.
+N_EVAL_GAMES = 20
 ROLLOUTS_PER_STATE = 60
 MAX_PLAYS = 400
 RESULTS_CSV_PATH = "win_prob_results.csv"
@@ -243,13 +244,26 @@ def game_rows(pbp, game_id):
 
 
 def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
-             rollouts_per_state=ROLLOUTS_PER_STATE, max_plays=MAX_PLAYS, seed=SEED):
+             rollouts_per_state=ROLLOUTS_PER_STATE, max_plays=MAX_PLAYS, seed=SEED,
+             results_path=None):
     """
     Runs the full harness over `game_ids`. Returns (records_by_quarter,
     csv_rows, skipped): records_by_quarter maps quarter -> list of (p_hat, y)
     for summarize(); csv_rows is the flat per-state log for the CSV dump;
     skipped counts game-quarter points with no real scrimmage play that
     quarter (see real_state_at_quarter_start).
+
+    If `results_path` is given, csv_rows is written to that path after EVERY
+    game finishes (overwriting the file each time -- cheap at this scale,
+    at most len(game_ids) * len(QUARTERS) rows), not just once at the end.
+    A long run is many hours of wall-clock time (see the N_EVAL_GAMES/
+    ROLLOUTS_PER_STATE comment above); this means a crash partway through
+    (e.g. the process getting killed) still leaves a usable partial result
+    on disk instead of losing everything. Note this protects against the
+    PROCESS dying while the machine stays up -- it does NOT protect against
+    the machine/runtime itself being destroyed (e.g. a Colab runtime
+    disconnect wipes local disk too); write `results_path` to Drive-mounted
+    storage instead of local disk if that's the risk you're guarding against.
     """
     assert max_plays >= 4 * PLAYS_PER_QUARTER, \
         "max_plays must be generous enough to reach overtime, or rollout_outcome's " \
@@ -277,6 +291,9 @@ def evaluate(model, dataset, pbp, game_ids, device, special_teams=None,
             p_hat = win_probability(sim, initial_state, rollouts_per_state, base_seed, max_plays, initial_form_state)
             records_by_quarter[quarter].append((p_hat, y))
             csv_rows.append({"game_id": game_id, "quarter": quarter, "p_hat": p_hat, "y": y})
+
+        if results_path is not None:
+            pd.DataFrame(csv_rows).to_csv(results_path, index=False)
 
     model.train()
     return records_by_quarter, csv_rows, skipped
@@ -306,6 +323,7 @@ def main():
 
     records_by_quarter, csv_rows, skipped = evaluate(
         model, dataset, pbp, game_ids, DEVICE, special_teams=special_teams,
+        results_path=RESULTS_CSV_PATH,
     )
     print(f"skipped {skipped} game-quarter points with no real scrimmage play that quarter")
 
@@ -318,8 +336,7 @@ def main():
     m = summary["overall"]
     print(f"{'overall':10s}{m['n']:>6d}{m['accuracy']*100:>11.1f}%{m['brier']:>10.4f}")
 
-    pd.DataFrame(csv_rows).to_csv(RESULTS_CSV_PATH, index=False)
-    print(f"\nraw per-state results written to {RESULTS_CSV_PATH}")
+    print(f"\nraw per-state results written to {RESULTS_CSV_PATH} (updated after every game)")
 
 
 if __name__ == "__main__":
