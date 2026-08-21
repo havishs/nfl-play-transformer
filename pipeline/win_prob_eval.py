@@ -9,6 +9,7 @@ the full design and the compute-budget reasoning behind the constants below.
 """
 
 import hashlib
+import os
 import random
 
 import pandas as pd
@@ -41,6 +42,12 @@ N_EVAL_GAMES = 20
 ROLLOUTS_PER_STATE = 60
 MAX_PLAYS = 400
 RESULTS_CSV_PATH = "win_prob_results.csv"
+# If a file exists at this path when main() runs, its game_id column is
+# excluded from sampling -- lets a follow-up run test a pattern found in an
+# earlier run against a guaranteed-non-overlapping set of fresh games,
+# rather than silently re-including some of the same games (see
+# sample_validation_games' `exclude` param and read_prior_game_ids below).
+PRIOR_RESULTS_PATH = "win_prob_results_prior.csv"
 
 # The raw pbp_{season}.parquet files have ~397 columns (see PROJECT_BRIEF.md);
 # this harness only ever reads the fields below (directly, or via
@@ -188,19 +195,32 @@ def win_probability(sim, initial_state, n_rollouts, base_seed, max_plays, initia
     return wins_a / n_rollouts
 
 
-def sample_validation_games(dataset, n_games, seed):
+def sample_validation_games(dataset, n_games, seed, exclude=frozenset()):
     """
     Deterministic subsample of the held-out validation split (same split
     eval.py uses: the last VAL_FRACTION of games, chronologically). See the
     design doc for why this harness subsamples rather than evaluating the
     full validation set (full-set compute is not tractable given generate()
     isn't batched across rollouts).
+
+    `exclude`: game_ids removed from the sampling pool BEFORE sampling, so
+    they cannot be drawn no matter what the RNG does -- guarantees a fresh
+    sample is truly disjoint from a prior one, rather than relying on
+    random.sample's exact selection order staying stable as n_games grows
+    (it isn't guaranteed to).
     """
     game_ids = sorted(build_game_index(dataset.examples).keys())
     n_val = max(1, round(len(game_ids) * VAL_FRACTION))
-    val_game_ids = game_ids[-n_val:]
+    val_game_ids = [gid for gid in game_ids[-n_val:] if gid not in exclude]
     rng = random.Random(seed)
     return sorted(rng.sample(val_game_ids, min(n_games, len(val_game_ids))))
+
+
+def read_prior_game_ids(path):
+    """game_ids from a previous run's results CSV at `path`, or an empty set if it doesn't exist."""
+    if not os.path.exists(path):
+        return set()
+    return set(pd.read_csv(path)["game_id"])
 
 
 def _is_correct(p_hat, y):
@@ -317,7 +337,11 @@ def main():
     print("loading special-teams (kicker/punter) data...")
     special_teams = SpecialTeamsFeatureLookup(TRAINING_SEASONS, DATA_DIR)
 
-    game_ids = sample_validation_games(dataset, N_EVAL_GAMES, SEED)
+    exclude_game_ids = read_prior_game_ids(PRIOR_RESULTS_PATH)
+    if exclude_game_ids:
+        print(f"excluding {len(exclude_game_ids)} previously-evaluated games found in {PRIOR_RESULTS_PATH}")
+
+    game_ids = sample_validation_games(dataset, N_EVAL_GAMES, SEED, exclude=exclude_game_ids)
     print(f"evaluating {len(game_ids)} validation games x {len(QUARTERS)} in-game points x "
           f"{ROLLOUTS_PER_STATE} rollouts each...")
 

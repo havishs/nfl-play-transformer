@@ -14,6 +14,7 @@ from win_prob_eval import (
     evaluate,
     game_rows,
     load_pbp_for_seasons,
+    read_prior_game_ids,
     real_form_state_before,
     real_outcome,
     real_state_at_quarter_start,
@@ -303,6 +304,52 @@ def test_sample_validation_games_stays_within_the_held_out_split(small_dataset):
 def test_sample_validation_games_caps_at_available_val_games(small_dataset):
     sampled = sample_validation_games(small_dataset, n_games=10_000, seed=1)
     assert len(sampled) <= len(build_game_index(small_dataset.examples))
+
+
+def test_sample_validation_games_never_returns_an_excluded_game():
+    # A synthetic dataset (20 distinct single-play games) rather than
+    # small_dataset -- small_dataset only has ~10 real games total, so its
+    # VAL_FRACTION=0.1 held-out slice is just 1 game, not enough to
+    # meaningfully test exclusion. build_game_index only needs game_id to
+    # group consecutive plays, so a minimal fake example list is sufficient.
+    examples = [{"game_id": f"2023_01_G{i:02d}"} for i in range(20)]
+    fake_dataset = SimpleNamespace(examples=examples)
+
+    from get_batch import build_game_index
+    from train import VAL_FRACTION
+    game_ids = sorted(build_game_index(fake_dataset.examples).keys())
+    n_val = max(1, round(len(game_ids) * VAL_FRACTION))
+    val_game_ids = game_ids[-n_val:]
+    assert len(val_game_ids) >= 2, "test setup error: need >=2 held-out games to test exclusion"
+    excluded = {val_game_ids[0]}
+
+    # sample every held-out game except the excluded one, to make the assertion airtight
+    sampled = sample_validation_games(fake_dataset, n_games=len(val_game_ids), seed=1, exclude=excluded)
+    assert excluded.isdisjoint(sampled)
+    assert set(sampled) == set(val_game_ids) - excluded
+
+
+def test_sample_validation_games_with_no_exclusions_matches_the_default(small_dataset):
+    # exclude=frozenset() (the default) must be a true no-op, not just "usually works"
+    without_arg = sample_validation_games(small_dataset, n_games=3, seed=7)
+    with_empty_exclude = sample_validation_games(small_dataset, n_games=3, seed=7, exclude=frozenset())
+    assert without_arg == with_empty_exclude
+
+
+def test_read_prior_game_ids_returns_empty_set_when_file_does_not_exist(tmp_path):
+    assert read_prior_game_ids(str(tmp_path / "does_not_exist.csv")) == set()
+
+
+def test_read_prior_game_ids_returns_the_game_id_column(tmp_path):
+    path = tmp_path / "prior_results.csv"
+    pd.DataFrame({
+        "game_id": ["2023_01_KC_SF", "2023_01_KC_SF", "2023_02_DAL_NYG"],
+        "quarter": [1, 2, 1],
+        "p_hat": [0.5, 0.6, 0.4],
+        "y": [1.0, 1.0, 0.0],
+    }).to_csv(path, index=False)
+
+    assert read_prior_game_ids(str(path)) == {"2023_01_KC_SF", "2023_02_DAL_NYG"}
 
 
 def test_summarize_hand_computed_accuracy_and_brier():
