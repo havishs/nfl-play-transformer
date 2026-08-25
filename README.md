@@ -63,8 +63,6 @@ pipeline/               all source + tests (131 tests, pytest)
                           feature engineering modules, each single-purpose
   test_*.py              one test file per module above
 results/                 raw per-state CSVs from the win-probability evaluation
-docs/superpowers/        design specs + implementation plans, one pair per
-                          sub-project, in the order they were built
 PROJECT_BRIEF.md         full architecture doc, data-source citations,
                           known limitations, immediate next steps
 colab_setup.ipynb        end-to-end Colab notebook (fetch data → train →

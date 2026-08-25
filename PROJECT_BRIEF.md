@@ -1,23 +1,24 @@
 # NFL Play-by-Play Transformer — Project Brief
 
-## Read this first
-This is a handoff from a design/exploration session with Claude (chat) to
-Claude Code. The person building this already worked through Karpathy's
-"Let's build GPT" tutorial end to end (bigram -> embeddings -> self-attention
--> multi-head attention -> feedforward -> residual -> LayerNorm -> full
-decoder-only transformer on char-level Shakespeare) and understands attention
-mechanics, causal masking, and the training loop cold. **Do not re-explain
-attention from zero.** Do walk through genuinely new concepts (nested
-attention, multi-field embeddings, the encoder/decoder split below) the same
-incremental, example-driven way Karpathy's tutorial does.
+## Background
 
-Working style that matters: this person wants to **understand and iterate on
-the design**, not receive a finished repo. Build incrementally, verify
-against real data before committing to a design (this whole project has been
-built that way -- every field/bucket/architecture choice below was checked
-against actual nfl_data_py output, not assumed), and explain *why* before
-writing code that depends on it. When you hit a genuinely ambiguous design
-fork, surface it rather than silently picking one.
+I came into this project having worked through Karpathy's "Let's build GPT"
+tutorial end to end (bigram -> embeddings -> self-attention -> multi-head
+attention -> feedforward -> residual -> LayerNorm -> full decoder-only
+transformer on char-level Shakespeare), so I understood attention mechanics,
+causal masking, and the training loop before starting. What follows documents
+the design decisions and data findings that went beyond that foundation:
+nested attention, multi-field embeddings, and the encoder/decoder split
+described below.
+
+The working principle throughout: verify against real data before committing
+to a design, not assume. Every field, bucket boundary, and architecture
+choice in this doc was checked against actual `nfl_data_py` output, not
+guessed -- see the Data Findings section for the specifics.
+
+For current project status, results, and how to run it, see
+[`README.md`](README.md) -- this doc is the deep architecture and
+data-findings reference underneath that.
 
 ---
 
@@ -37,7 +38,7 @@ x multiple seasons is a real dataset.
 
 ---
 
-## Architecture: the four-piece stack (current design, as of this handoff)
+## Architecture: the four-piece stack
 
 The original plan was a flat Karpathy-style decoder operating on team-level
 situational fields only (down/distance/field position/score/etc., no player
@@ -94,7 +95,7 @@ vectors fall back to bio/usage features only (years experience, games
 started, draft capital, snap count). Expect this to be the noisiest part of
 the player vector. This is an accepted, documented gap, not a bug to chase.
 
-**Player quality vector design:** the person wants "sum of the vector ~=
+**Player quality vector design:** the goal is "sum of the vector ~=
 overall quality, but the vector is multi-faceted." This does NOT happen for
 free from a plain `nn.Embedding` -- it must be engineered. Agreed approach:
 **real-stat initialization** -- seed each player's embedding from actual
@@ -187,7 +188,7 @@ directly on the play-by-play data, sufficient for chronological ordering.
 
 ---
 
-## Two real bugs found and fixed this session (watch for this pattern)
+## Two real bugs found and fixed early on (watch for this pattern)
 
 Both are the same underlying failure mode: **something that isn't a
 meaningful value gets silently treated as a legitimate one.** Worth internalizing
@@ -219,6 +220,15 @@ new numeric defaulting gets introduced.
 
 ## What's already built and validated (in `pipeline/`)
 
+*The rest of this document, from here down, reflects the state of the
+project at the initial design/scoping phase (vocab/tensorization not yet
+built, only 2022-2023 data loaded, etc.). The project has grown substantially
+since -- full training pipeline, special teams modeling, and a Monte Carlo
+win-probability evaluation harness all now exist. See [`README.md`](README.md)
+for current scope, results, and repo structure; the sections below remain
+useful for the data-verification details and design tradeoffs behind the
+early architecture decisions.*
+
 - `situational.py` -- bucketing for all situational fields (play_type, down,
   distance, field_zone, score_diff, quarter, time_bucket, yards_gained,
   return_yards), all boundaries chosen from real data distributions, not
@@ -236,7 +246,8 @@ new numeric defaulting gets introduced.
   personnel-missing rows. Tested end-to-end on 2023 (training) with 2022 as
   history-only lookback.
 
-**Currently cached in `data/`** (bundled with this handoff, ~42MB total):
+**Cached in `data/` at this point in the project** (~42MB total, since
+expanded to the full 2018-2023 range -- see README.md):
 `pbp_2022.parquet`, `pbp_2023.parquet`, `weekly_off_2022/2023.parquet`,
 `weekly_def_2022/2023.parquet` (already gsis-ID-mapped), `roster_2022/2023.parquet`.
 
@@ -318,11 +329,10 @@ new numeric defaulting gets introduced.
 
 ---
 
-## Original project doc
+## Why play-level, not game-level (recap)
 
-The original scoping doc (data source: `nfl_data_py`/nflfastR, build order,
-starting field table, etc.) that kicked off this whole project is available
-on request from the person if you need the very first framing -- most of its
-content is superseded or incorporated above, but it also contains reasoning
-about why play-level beats game-level modeling that's still fully valid and
-wasn't repeated in full here.
+Worth restating from the top of this doc: a game-level model (one token per
+past game) throws away the situational detail that actually determines the
+score, and with only ~17 games/team/season there isn't enough sequence data
+anyway. Play-level tokens fix both problems at once, which is the reasoning
+that shaped every architecture decision above.
