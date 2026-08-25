@@ -2,7 +2,6 @@
 
 A decoder-only transformer that generates NFL games autoregressively, one play at a time, and a Monte Carlo harness that turns those generated rollouts into a win-probability estimate — evaluated against real outcomes, not just per-play accuracy.
 
-
 ## What this is
 
 Most NFL prediction projects treat a game as a fixed feature vector — final score, box-score stats — and regress on it. This project instead models a game as a sequence: ~174 real plays, each with situational context (down/distance/field position/score) and full 22-man personnel (11 offense + 11 defense), fed through a GPT-style causal decoder. Predicting one play at a time and rolling the model forward autoregressively means the model has to actually learn drive-level football logic (a 3rd-and-2 behaves differently than a 3rd-and-15) rather than just memorizing aggregate stats.
