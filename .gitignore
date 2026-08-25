@@ -6,3 +6,5 @@ data/*.parquet
 *.pt
 *.pkl
 pipeline/win_prob_results.csv
+pipeline/win_prob_results_prior.csv
+.DS_Store
