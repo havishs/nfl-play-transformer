@@ -2,15 +2,14 @@
 
 A decoder-only transformer that generates NFL games autoregressively, one play at a time, and a Monte Carlo harness that turns those generated rollouts into a win-probability estimate — evaluated against real outcomes, not just per-play accuracy.
 
-Built as the ML/systems flagship piece of an internship-prep portfolio. The results below are reported as measured, including the ones that didn't work — a negative result with real evidence behind it is worth more than an inflated claim.
 
 ## What this is
 
-Most NFL prediction projects treat a game as a fixed feature vector — final score, box-score stats — and regress on it. This project instead models a game as a *sequence*: ~174 real plays, each with situational context (down/distance/field position/score) and full 22-man personnel (11 offense + 11 defense), fed through a GPT-style causal decoder. Predicting one play at a time and rolling the model forward autoregressively means the model has to actually learn drive-level football logic (a 3rd-and-2 behaves differently than a 3rd-and-15) rather than just memorizing aggregate stats.
+Most NFL prediction projects treat a game as a fixed feature vector — final score, box-score stats — and regress on it. This project instead models a game as a sequence: ~174 real plays, each with situational context (down/distance/field position/score) and full 22-man personnel (11 offense + 11 defense), fed through a GPT-style causal decoder. Predicting one play at a time and rolling the model forward autoregressively means the model has to actually learn drive-level football logic (a 3rd-and-2 behaves differently than a 3rd-and-15) rather than just memorizing aggregate stats.
 
 The architecture is a four-piece stack:
 
-1. **Player history encoder** — per-player causal rolling-average stats (career-to-date, position-aware). Currently hand-computed rather than learned; see [Future Work](#future-work).
+1. **Player history encoder** — per-player causal rolling-average stats (career-to-date, position-aware). Currently hand-computed rather than learned.
 2. **In-game team form** — a live, causally-updated EMA of each team's in-game offensive/defensive performance, evolving as the model generates.
 3. **Nested play-level attention** — the 11 offensive and 11 defensive players on a given play attend to each other, producing one play-summary token. This replaces hard-coded matchup assignment (e.g. "which CB covers which WR"), which isn't in any public NFL dataset — the attention layer learns implicit matchups instead.
 4. **Outer causal decoder** — a standard GPT-style decoder over the play-summary tokens, causal across an entire game.
